@@ -158,8 +158,25 @@ def _run_hierarchical_coordination(operational_planning):
 
     print('[INFO] Running HIERARCHICAL OPERATIONAL PLANNING...')
 
+    transmission_network = operational_planning.transmission_network
+    distribution_networks = operational_planning.distribution_networks
+    admm_parameters = operational_planning.params
+    results = {'tso': dict(), 'dso': dict()}
+
+    # Create ADN models
+    dso_models, results['dso'] = create_distribution_networks_models(distribution_networks)
+
+
     print()
 
+
+def create_distribution_networks_models(distribution_networks):
+    dso_models = dict()
+    for node_id in distribution_networks:
+        distribution_network = distribution_networks[node_id]
+        dso_model = distribution_network.build_model()
+        dso_models[node_id] = dso_model
+    return dso_models
 
 # ======================================================================================================================
 #   Aux functions
