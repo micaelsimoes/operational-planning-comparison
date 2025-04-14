@@ -35,6 +35,10 @@ class Network:
         self.active_distribution_network_nodes = list()
         self.params = NetworkParameters()
 
+    def build_model(self):
+        _pre_process_network(self)
+        return _build_model(self)
+
     def read_network_data(self, operational_data_filename):
         _read_network_data(self, operational_data_filename)
 
@@ -59,6 +63,13 @@ class Network:
         print(f'[ERROR] Network {self.name}. No REF NODE found! Check network.')
         exit(ERROR_NETWORK_FILE)
 
+    def get_node_type(self, node_id):
+        for node in self.nodes:
+            if node.bus_i == node_id:
+                return node.type
+        print(f'[ERROR] Network {self.name}. Node {node_id} not found! Check network.')
+        exit(ERROR_NETWORK_FILE)
+
     def get_node_base_kv(self, node_id):
         for node in self.nodes:
             if node.bus_i == node_id:
@@ -78,6 +89,11 @@ class Network:
             if generator.gen_type in GEN_CURTAILLABLE_TYPES:
                 num_renewable_gens += 1
         return num_renewable_gens
+
+    def compute_series_admittance(self):
+        for branch in self.branches:
+            branch.g = branch.r / (branch.r ** 2 + branch.x ** 2)
+            branch.b = -branch.x / (branch.r ** 2 + branch.x ** 2)
 
     def perform_network_check(self):
         _perform_network_check(self)
@@ -506,3 +522,68 @@ def _perform_network_check(network):
     if n_branch == 0:
         print(f'[ERROR] Reading network {network.name}. No branches imported.')
         exit(ERROR_NETWORK_FILE)
+
+
+def _pre_process_network(network):
+
+    processed_nodes = []
+    for node in network.nodes:
+        if node.type != BUS_ISOLATED:
+            processed_nodes.append(node)
+
+    processed_gens = []
+    for gen in network.generators:
+        node_type = network.get_node_type(gen.bus)
+        if node_type != BUS_ISOLATED:
+            processed_gens.append(gen)
+
+    processed_branches = []
+    for branch in network.branches:
+
+        if not branch.is_connected():  # If branch is disconnected for all days and periods, remove
+            continue
+
+        if branch.pre_processed:
+            continue
+
+        fbus, tbus = branch.fbus, branch.tbus
+        fnode_type = network.get_node_type(fbus)
+        tnode_type = network.get_node_type(tbus)
+        if fnode_type == BUS_ISOLATED or tnode_type == BUS_ISOLATED:
+            branch.pre_processed = True
+            continue
+
+        parallel_branches = [branch for branch in network.branches if ((branch.fbus == fbus and branch.tbus == tbus) or (branch.fbus == tbus and branch.tbus == fbus))]
+        connected_parallel_branches = [branch for branch in parallel_branches if branch.is_connected()]
+        if len(connected_parallel_branches) > 1:
+            processed_branch = connected_parallel_branches[0]
+            r_eq, x_eq, g_eq, b_eq = _pre_process_parallel_branches(connected_parallel_branches)
+            processed_branch.r = r_eq
+            processed_branch.x = x_eq
+            processed_branch.g_sh = g_eq
+            processed_branch.b_sh = b_eq
+            processed_branch.rate = sum([branch.rate for branch in connected_parallel_branches])
+            processed_branch.ratio = branch.ratio
+            processed_branch.pre_processed = True
+            for branch_parallel in parallel_branches:
+                branch_parallel.pre_processed = True
+            processed_branches.append(processed_branch)
+        else:
+            for branch_parallel in parallel_branches:
+                branch_parallel.pre_processed = True
+            for branch_parallel in connected_parallel_branches:
+                processed_branches.append(branch_parallel)
+
+    network.nodes = processed_nodes
+    network.generators = processed_gens
+    network.branches = processed_branches
+    for branch in network.branches:
+        branch.pre_processed = False
+
+
+def _pre_process_parallel_branches(branches):
+    branch_impedances = [complex(branch.r, branch.x) for branch in branches]
+    branch_shunt_admittance = [complex(branch.g_sh, branch.b_sh) for branch in branches]
+    z_eq = 1/sum([(1/impedance) for impedance in branch_impedances])
+    ysh_eq = sum([admittance for admittance in branch_shunt_admittance])
+    return abs(z_eq.real), abs(z_eq.imag), ysh_eq.real, ysh_eq.imag
