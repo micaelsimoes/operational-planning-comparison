@@ -1,3 +1,7 @@
+import os
+from network_parameters import NetworkParameters
+
+
 # ======================================================================================================================
 #   Class NETWORK
 # ======================================================================================================================
@@ -22,3 +26,9 @@ class Network:
         self.cost_energy_p = list()
         self.cost_flex = list()
         self.active_distribution_network_nodes = list()
+        self.params = NetworkParameters()
+
+
+    def read_network_parameters(self, params_filename):
+        filename = os.path.join(self.data_dir, self.name, params_filename)
+        self.params.read_parameters_from_file(filename)
