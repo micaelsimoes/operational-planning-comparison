@@ -1,6 +1,7 @@
 import os
 import sys
 import getopt
+from operational_planning import OperationalPlanning
 
 
 # ======================================================================================================================
@@ -47,11 +48,16 @@ def read_execution_arguments(argv):
 
     return spec_filename, test_case_dir
 
+
 # ======================================================================================================================
 #  Main
 # ======================================================================================================================
 if __name__ == '__main__':
+
     filename, test_case = read_execution_arguments(sys.argv[1:])
     directory = os.path.join(os.getcwd(), 'data', test_case)
+
+    operational_planning = OperationalPlanning(directory, filename)
+    operational_planning.read_case_study()
 
 
