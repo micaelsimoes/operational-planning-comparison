@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from network import Network
+from shared_energy_storage_data import SharedEnergyStorageData
 from operational_planning_parameters import ADMMParameters
 from helper_functions import *
 
@@ -20,6 +21,7 @@ class OperationalPlanning:
         self.cost_flex = 0.00
         self.distribution_networks = dict()
         self.transmission_network = Network()
+        self.shared_ess_data = SharedEnergyStorageData()
         self.params = ADMMParameters()
 
     def read_case_study(self):
@@ -94,6 +96,14 @@ def _read_case_study(operational_planning):
     transmission_network.read_network_data(operational_data_filename)
     transmission_network.active_distribution_network_nodes = [node_id for node_id in operational_planning.distribution_networks]
     operational_planning.transmission_network = transmission_network
+
+    # Shared ESS
+    print('[INFO] Reading SHARED ESS DATA from file(s)...')
+    shared_ess_data = SharedEnergyStorageData()
+    shared_ess_data.data_dir = operational_planning.data_dir
+    shared_ess_data_filename = operational_planning_data['SharedEnergyStorages']['shared_ess_filename']
+    shared_ess_data.read_shared_energy_storage_data_from_file(shared_ess_data_filename)
+    operational_planning.shared_ess_data = shared_ess_data
 
     # Planning Parameters
     print(f'[INFO] Reading PLANNING PARAMETERS from file...')
