@@ -60,4 +60,6 @@ if __name__ == '__main__':
     operational_planning = OperationalPlanning(directory, filename)
     operational_planning.read_case_study()
 
+    operational_planning.run_hierarchical_coordination()
+
 
