@@ -65,8 +65,7 @@ def _read_case_study(operational_planning):
         distribution_network.diagrams_dir = operational_planning.diagrams_dir
         distribution_network.cost_energy_p = operational_planning.cost_energy_p
         distribution_network.cost_flex = operational_planning.cost_flex
-        distribution_network.params_file = params_filename
-        distribution_network.read_network_parameters()
+        distribution_network.read_network_parameters(params_filename)
         distribution_network.read_network_data()
 
 
@@ -90,6 +89,8 @@ def _get_market_costs_from_excel_file(filename):
     market_costs = dict()
     for i in range(num_rows):
         cost_type = data.iloc[i, 0]
-        value = data.iloc[i, 1]
-        market_costs[cost_type] = value
+        values = list()
+        for j in range(num_cols - 1):
+            values.append(data.iloc[i, j + 1])
+        market_costs[cost_type] = values
     return market_costs
