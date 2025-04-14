@@ -1,6 +1,8 @@
 import os
 import pandas as pd
+from math import isclose
 from network import Network
+from energy_storage import EnergyStorage
 from shared_energy_storage_data import SharedEnergyStorageData
 from operational_planning_parameters import ADMMParameters
 from helper_functions import *
@@ -22,7 +24,11 @@ class OperationalPlanning:
         self.distribution_networks = dict()
         self.transmission_network = Network()
         self.shared_ess_data = SharedEnergyStorageData()
+        self.active_distribution_network_nodes = list()
         self.params = ADMMParameters()
+
+    def run_hierarchical_coordination(self):
+        _run_hierarchical_coordination(self)
 
     def read_case_study(self):
         _read_case_study(self)
@@ -110,7 +116,11 @@ def _read_case_study(operational_planning):
     params_filename = operational_planning_data['PlanningParameters']['params_filename']
     operational_planning.read_operational_planning_parameters_from_file(params_filename)
 
+    _check_interface_nodes_base_voltage_consistency(operational_planning)
 
+    # Add Shared Energy Storages to Transmission and Distribution Networks
+    _add_shared_energy_storage_to_transmission_network(operational_planning)
+    _add_shared_energy_storage_to_distribution_network(operational_planning)
 
 
 
@@ -139,3 +149,64 @@ def _get_market_costs_from_excel_file(filename):
             values.append(data.iloc[i, j + 1])
         market_costs[cost_type] = values
     return market_costs
+
+
+# ======================================================================================================================
+#  OPERATIONAL PLANNING functions
+# ======================================================================================================================
+def _run_hierarchical_coordination(operational_planning):
+
+    print('[INFO] Running HIERARCHICAL OPERATIONAL PLANNING...')
+
+    print()
+
+
+# ======================================================================================================================
+#   Aux functions
+# ======================================================================================================================
+def _check_interface_nodes_base_voltage_consistency(operational_planning):
+    for node_id in operational_planning.distribution_networks:
+        tn_node_base_kv = operational_planning.transmission_network.get_node_base_kv(node_id)
+        dn_ref_node_id = operational_planning.distribution_networks[node_id].get_reference_node_id()
+        dn_node_base_kv = operational_planning.distribution_networks[node_id].get_node_base_kv(dn_ref_node_id)
+        if not isclose(tn_node_base_kv, dn_node_base_kv, rel_tol=5e-2):
+            print(f'[ERROR] Inconsistent TN-DN base voltage at node {node_id}! Check network(s). Exiting')
+            exit(ERROR_SPECIFICATION_FILE)
+
+
+def _add_shared_energy_storage_to_transmission_network(operational_planning):
+    s_base = operational_planning.transmission_network.baseMVA
+    for node_id in operational_planning.active_distribution_network_nodes:
+        for shared_ess in operational_planning.shared_ess_data.shared_energy_storages:
+            if shared_ess.bus == node_id:
+                shared_energy_storage = EnergyStorage()
+                shared_energy_storage.bus = node_id
+                shared_energy_storage.s = shared_ess.s / s_base
+                shared_energy_storage.e = shared_ess.e / s_base
+                shared_energy_storage.e_init = shared_ess.e_init / s_base
+                shared_energy_storage.e_min = shared_ess.e_min / s_base
+                shared_energy_storage.e_max = shared_ess.e_max / s_base
+                shared_energy_storage.eff_ch = shared_ess.eff_ch
+                shared_energy_storage.eff_dch = shared_ess.eff_dch
+                shared_energy_storage.max_pf = shared_ess.max_pf
+                shared_energy_storage.min_pf = shared_ess.min_pf
+                operational_planning.transmission_network.shared_energy_storages.append(shared_energy_storage)
+
+
+def _add_shared_energy_storage_to_distribution_network(operational_planning):
+    for node_id in operational_planning.distribution_networks:
+        s_base = operational_planning.distribution_networks[node_id].baseMVA
+        for shared_ess in operational_planning.shared_ess_data.shared_energy_storages:
+            if shared_ess.bus == node_id:
+                shared_energy_storage = EnergyStorage()
+                shared_energy_storage.bus = operational_planning.distribution_networks[node_id].get_reference_node_id()
+                shared_energy_storage.s = shared_energy_storage.s / s_base
+                shared_energy_storage.e = shared_energy_storage.e / s_base
+                shared_energy_storage.e_init = shared_ess.e_init / s_base
+                shared_energy_storage.e_min = shared_ess.e_min / s_base
+                shared_energy_storage.e_max = shared_ess.e_max / s_base
+                shared_energy_storage.eff_ch = shared_ess.eff_ch
+                shared_energy_storage.eff_dch = shared_ess.eff_dch
+                shared_energy_storage.max_pf = shared_ess.max_pf
+                shared_energy_storage.min_pf = shared_ess.min_pf
+                operational_planning.distribution_networks[node_id].shared_energy_storages.append(shared_energy_storage)
