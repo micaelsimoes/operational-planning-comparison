@@ -52,6 +52,20 @@ class Network:
         filename = os.path.join(self.data_dir, self.name, params_filename)
         self.params.read_parameters_from_file(filename)
 
+    def get_reference_node_id(self):
+        for node in self.nodes:
+            if node.type == BUS_REF:
+                return node.bus_i
+        print(f'[ERROR] Network {self.name}. No REF NODE found! Check network.')
+        exit(ERROR_NETWORK_FILE)
+
+    def get_node_base_kv(self, node_id):
+        for node in self.nodes:
+            if node.bus_i == node_id:
+                return node.base_kv
+        print(f'[ERROR] Network {self.name}. Node {node_id} not found! Check network.')
+        exit(ERROR_NETWORK_FILE)
+
     def node_exists(self, node_id):
         for node in self.nodes:
             if node.bus_i == node_id:
