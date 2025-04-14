@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 from node import Node
 from load import Load
 from branch import Branch
@@ -56,6 +57,13 @@ class Network:
             if node.bus_i == node_id:
                 return True
         return False
+
+    def get_num_renewable_gens(self):
+        num_renewable_gens = 0
+        for generator in self.generators:
+            if generator.gen_type in GEN_CURTAILLABLE_TYPES:
+                num_renewable_gens += 1
+        return num_renewable_gens
 
     def perform_network_check(self):
         _perform_network_check(self)
@@ -203,6 +211,271 @@ def _read_network_from_json_file(network, filename):
             energy_storage.max_pf = float(energy_storage_data['max_pf'])
             energy_storage.min_pf = float(energy_storage_data['min_pf'])
             network.energy_storages.append(energy_storage)
+
+
+# ======================================================================================================================
+#   NETWORK OPERATIONAL DATA read functions
+# ======================================================================================================================
+def _read_network_operational_data_from_file(network, filename):
+
+    data = {
+        'consumption': {
+            'pc': dict(), 'qc': dict()
+        },
+        'flexibility': {
+            'upward': dict(),
+            'downward': dict()
+        },
+        'generation': {
+            'pg': dict(), 'qg': dict(), 'status': list()
+        }
+    }
+
+    # Scenario information
+    num_oper_scenarios, prob_oper_scenarios = _get_operational_scenario_info_from_excel_file(filename, 'Main')
+    network.prob_operation_scenarios = prob_oper_scenarios
+
+    # Consumption and Generation data -- by scenario
+    for i in range(len(network.prob_operation_scenarios)):
+
+        sheet_name_pc = f'Pc, S{i + 1}'
+        sheet_name_qc = f'Qc, S{i + 1}'
+        sheet_name_pg = f'Pg, S{i + 1}'
+        sheet_name_qg = f'Qg, S{i + 1}'
+
+        # Consumption per scenario (active, reactive power)
+        pc_scenario = _get_consumption_flexibility_data_from_excel_file(filename, sheet_name_pc)
+        qc_scenario = _get_consumption_flexibility_data_from_excel_file(filename, sheet_name_qc)
+        if not pc_scenario:
+            print(f'[ERROR] Network {network.name}. No active power consumption data provided for scenario {i + 1}. Exiting...')
+            exit(ERROR_OPERATIONAL_DATA_FILE)
+        if not qc_scenario:
+            print(f'[ERROR] Network {network.name}. No reactive power consumption data provided for scenario {i + 1}. Exiting...')
+            exit(ERROR_OPERATIONAL_DATA_FILE)
+        data['consumption']['pc'][i] = pc_scenario
+        data['consumption']['qc'][i] = qc_scenario
+
+        # Generation per scenario (active, reactive power)
+        num_renewable_gens = network.get_num_renewable_gens()
+        if num_renewable_gens > 0:
+            pg_scenario = _get_generation_data_from_excel_file(filename, sheet_name_pg)
+            qg_scenario = _get_generation_data_from_excel_file(filename, sheet_name_qg)
+            if not pg_scenario:
+                print(f'[ERROR] Network {network.name}. No active power generation data provided for scenario {i + 1}. Exiting...')
+                exit(ERROR_OPERATIONAL_DATA_FILE)
+            if not qg_scenario:
+                print(f'[ERROR] Network {network.name}. No reactive power generation data provided for scenario {i + 1}. Exiting...')
+                exit(ERROR_OPERATIONAL_DATA_FILE)
+            data['generation']['pg'][i] = pg_scenario
+            data['generation']['qg'][i] = qg_scenario
+
+    # Generators status. Note: common to all scenarios
+    data['generation']['status'] = _get_generator_status_from_excel_file(filename, f'GenStatus')
+
+    # Flexibility data
+    flex_up_p = _get_consumption_flexibility_data_from_excel_file(filename, f'UpFlex')
+    if not flex_up_p:
+        for load in network.loads:
+            flex_up_p[load.load_id] = [0.0 for _ in range(network.num_instants)]
+    data['flexibility']['upward'] = flex_up_p
+
+    flex_down_p = _get_consumption_flexibility_data_from_excel_file(filename, f'DownFlex')
+    if not flex_down_p:
+        for load in network.loads:
+            flex_down_p[load.load_id] = [0.0 for _ in range(network.num_instants)]
+    data['flexibility']['downward'] = flex_down_p
+
+    return data
+
+
+def _get_operational_scenario_info_from_excel_file(filename, sheet_name):
+
+    num_scenarios = 0
+    prob_scenarios = list()
+
+    try:
+        df = pd.read_excel(filename, sheet_name=sheet_name, header=None)
+        if is_int(df.iloc[0, 1]):
+            num_scenarios = int(df.iloc[0, 1])
+        else:
+            print(f'[ERROR] File {filename}. Num scenarios should be an int!')
+            exit(ERROR_OPERATIONAL_DATA_FILE)
+        for i in range(num_scenarios):
+            if is_float(df.iloc[0, i+2]):
+                prob_scenarios.append(float(df.iloc[0, i+2]))
+            else:
+                print(f'[ERROR] File {filename}. Scenario probability should be a float!')
+                exit(ERROR_OPERATIONAL_DATA_FILE)
+    except:
+        print(f'[ERROR] Workbook {filename}. Sheet {sheet_name} does not exist.')
+        exit(ERROR_OPERATIONAL_DATA_FILE)
+
+    if num_scenarios != len(prob_scenarios):
+        print(f'[WARNING] Workbook {filename}. Data file. Number of scenarios different from the probability vector!')
+
+    if round(sum(prob_scenarios), 2) != 1.00:
+        print(f'[ERROR] Workbook {filename}. Probability of scenarios does not add up to 100%.')
+        exit(ERROR_OPERATIONAL_DATA_FILE)
+
+    return num_scenarios, prob_scenarios
+
+
+def _get_consumption_flexibility_data_from_excel_file(filename, sheet_name):
+
+    try:
+        data = pd.read_excel(filename, sheet_name=sheet_name)
+        num_rows, num_cols = data.shape
+        processed_data = dict()
+        for i in range(num_rows):
+            node_id = data.iloc[i, 0]
+            processed_data[node_id] = [0.0 for _ in range(num_cols - 1)]
+        for node_id in processed_data:
+            node_values = [0.0 for _ in range(num_cols - 1)]
+            for i in range(0, num_rows):
+                aux_node_id = data.iloc[i, 0]
+                if aux_node_id == node_id:
+                    for j in range(0, num_cols - 1):
+                        node_values[j] += data.iloc[i, j + 1]
+            processed_data[node_id] = node_values
+    except:
+        print(f'[WARNING] Workbook {filename}. Sheet {sheet_name} does not exist.')
+        processed_data = {}
+
+    return processed_data
+
+
+def _get_generation_data_from_excel_file(filename, sheet_name):
+
+    try:
+        data = pd.read_excel(filename, sheet_name=sheet_name)
+        num_rows, num_cols = data.shape
+        processed_data = dict()
+        for i in range(num_rows):
+            gen_id = data.iloc[i, 0]
+            processed_data[gen_id] = [0.0 for _ in range(num_cols - 1)]
+        for gen_id in processed_data:
+            processed_data_gen = [0.0 for _ in range(num_cols - 1)]
+            for i in range(0, num_rows):
+                aux_node_id = data.iloc[i, 0]
+                if aux_node_id == gen_id:
+                    for j in range(0, num_cols - 1):
+                        processed_data_gen[j] += data.iloc[i, j + 1]
+            processed_data[gen_id] = processed_data_gen
+    except:
+        print(f'[WARNING] Workbook {filename}. Sheet {sheet_name} does not exist.')
+        processed_data = {}
+
+    return processed_data
+
+
+def _get_generator_status_from_excel_file(filename, sheet_name):
+
+    try:
+        data = pd.read_excel(filename, sheet_name=sheet_name)
+        num_rows, num_cols = data.shape
+        status_values = dict()
+        for i in range(num_rows):
+            gen_id = data.iloc[i, 0]
+            status_values[gen_id] = list()
+            for j in range(0, num_cols - 1):
+                status_values[gen_id].append(bool(data.iloc[i, j + 1]))
+    except:
+        print(f'[WARNING] Workbook {filename}. Sheet {sheet_name} does not exist.')
+        status_values = list()
+
+    return status_values
+
+
+def _update_network_with_excel_data(network, data):
+
+    for load in network.loads:
+
+        load_id = load.load_id
+        load.pd = dict()         # Note: Changes Pd and Qd fields to dicts (per scenario)
+        load.qd = dict()
+
+        for s in range(len(network.prob_operation_scenarios)):
+            pc = _get_consumption_from_data(data, load_id, network.num_instants, s, DATA_ACTIVE_POWER)
+            qc = _get_consumption_from_data(data, load_id, network.num_instants, s, DATA_REACTIVE_POWER)
+            load.pd[s] = [instant / network.baseMVA for instant in pc]
+            load.qd[s] = [instant / network.baseMVA for instant in qc]
+        flex_up_p = _get_flexibility_from_data(data, load_id, network.num_instants, DATA_UPWARD_FLEXIBILITY)
+        flex_down_p = _get_flexibility_from_data(data, load_id, network.num_instants, DATA_DOWNWARD_FLEXIBILITY)
+        load.flexibility.upward = [p / network.baseMVA for p in flex_up_p]
+        load.flexibility.downward = [q / network.baseMVA for q in flex_down_p]
+
+    for generator in network.generators:
+
+        generator.pg = dict()  # Note: Changes Pg and Qg fields to dicts (per scenario)
+        generator.qg = dict()
+
+        # Active and Reactive power
+        for s in range(len(network.prob_operation_scenarios)):
+            if generator.gen_type in GEN_CURTAILLABLE_TYPES:
+                pg = _get_generation_from_data(data, generator.gen_id, s, DATA_ACTIVE_POWER)
+                qg = _get_generation_from_data(data, generator.gen_id, s, DATA_REACTIVE_POWER)
+                generator.pg[s] = [instant / network.baseMVA for instant in pg]
+                generator.qg[s] = [instant / network.baseMVA for instant in qg]
+            else:
+                generator.pg[s] = [0.00 for _ in range(network.num_instants)]
+                generator.qg[s] = [0.00 for _ in range(network.num_instants)]
+
+        # Status
+        if generator.gen_id in data['generation']['status']:
+            generator.status = data['generation']['status'][generator.gen_id]
+        else:
+            generator.status = [generator.status for _ in range(network.num_instants)]
+
+    network.data_loaded = True
+
+
+def _get_consumption_from_data(data, node_id, num_instants, idx_scenario, type):
+
+    if type == DATA_ACTIVE_POWER:
+        power_label = 'pc'
+    else:
+        power_label = 'qc'
+
+    for node in data['consumption'][power_label][idx_scenario]:
+        if node == node_id:
+            return data['consumption'][power_label][idx_scenario][node_id]
+
+    consumption = [0.0 for _ in range(num_instants)]
+
+    return consumption
+
+
+def _get_flexibility_from_data(data, node_id, num_instants, flex_type):
+
+    flex_label = str()
+
+    if flex_type == DATA_UPWARD_FLEXIBILITY:
+        flex_label = 'upward'
+    elif flex_type == DATA_DOWNWARD_FLEXIBILITY:
+        flex_label = 'downward'
+    elif flex_type == DATA_COST_FLEXIBILITY:
+        flex_label = 'cost'
+    else:
+        print('[ERROR] Unrecognized flexibility type in get_flexibility_from_data. Exiting.')
+        exit(1)
+
+    for node in data['flexibility'][flex_label]:
+        if node == node_id:
+            return data['flexibility'][flex_label][node_id]
+
+    flex = [0.0 for _ in range(num_instants)]   # Returns empty flexibility vector
+
+    return flex
+
+
+def _get_generation_from_data(data, gen_id, idx_scenario, type):
+
+    if type == DATA_ACTIVE_POWER:
+        power_label = 'pg'
+    else:
+        power_label = 'qg'
+
+    return data['generation'][power_label][idx_scenario][gen_id]
 
 
 # ======================================================================================================================
