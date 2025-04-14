@@ -55,6 +55,7 @@ def _read_case_study(operational_planning):
 
         network_name = distribution_network_data['name']  # Network filename
         params_filename = distribution_network_data['params_filename']  # Params filename
+        operational_data_filename = distribution_network_data['operational_data_filename']  # Operational data filename
         connection_nodeid = distribution_network_data['connection_node_id']  # Connection node ID
 
         distribution_network = Network()
@@ -66,7 +67,7 @@ def _read_case_study(operational_planning):
         distribution_network.cost_energy_p = operational_planning.cost_energy_p
         distribution_network.cost_flex = operational_planning.cost_flex
         distribution_network.read_network_parameters(params_filename)
-        distribution_network.read_network_data()
+        distribution_network.read_network_data(operational_data_filename)
 
 
 # ======================================================================================================================
