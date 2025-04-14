@@ -24,3 +24,19 @@ def convert_json_to_dict(json_string):
     except TypeError as e:
         print(f'[ERROR] Could not convert JSON to dict. TypeError: {e}')
         exit(ERROR_SPECIFICATION_FILE)
+
+
+def is_int(s):
+    try:
+        int(s)
+        return True
+    except ValueError:
+        return False
+
+
+def is_float(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
