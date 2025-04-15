@@ -60,10 +60,11 @@ if __name__ == '__main__':
     operational_planning = OperationalPlanning(directory, filename)
     operational_planning.read_case_study()
 
-    operational_planning.transmission_network.run_opf()
+    # operational_planning.transmission_network.run_opf()
     for node_id in operational_planning.distribution_networks:
         distribution_network = operational_planning.distribution_networks[node_id]
-        distribution_network.run_opf()
+        # distribution_network.run_opf()
+        distribution_network.determine_pq_map()
 
     # operational_planning.run_hierarchical_coordination()
 

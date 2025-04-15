@@ -46,6 +46,9 @@ class Network:
         processed_results = self.process_results(model, results)
         self.write_optimization_results_to_excel(processed_results)
 
+    def determine_pq_map(self, num_steps=12):
+        model = _build_pq_map_model(self)
+
     def build_model(self):
         _pre_process_network(self)
         return _build_model(self)
@@ -124,6 +127,15 @@ class Network:
             if generator.gen_type in GEN_CURTAILLABLE_TYPES:
                 num_renewable_gens += 1
         return num_renewable_gens
+
+    def get_reference_gen_idx(self):
+        ref_node_id = self.get_reference_node_id()
+        for i in range(len(self.generators)):
+            gen = self.generators[i]
+            if gen.bus == ref_node_id:
+                return i
+        print(f'[ERROR] Network {self.name}. No REF NODE found! Check network.')
+        exit(ERROR_NETWORK_FILE)
 
     def get_gen_idx(self, node_id):
         for g in range(len(self.generators)):
@@ -931,6 +943,48 @@ def _build_model(network, n=0):
     model.ipopt_zL_in = pe.Suffix(direction=pe.Suffix.EXPORT)  # Ipopt bound multipliers (sent to solver)
     model.ipopt_zU_in = pe.Suffix(direction=pe.Suffix.EXPORT)
     model.dual = pe.Suffix(direction=pe.Suffix.IMPORT_EXPORT)  # Obtain dual solutions from previous solve and send to warm start
+
+    return model
+
+
+def _build_pq_map_model(network):
+
+    model = network.build_model()
+    ref_gen_idx = network.get_reference_gen_idx()
+
+    # Add expected interface power flow variables
+    expected_pf_p = 0.00
+    expected_pf_q = 0.00
+    model.expected_interface_pf_p = pe.Var(domain=pe.Reals, initialize=0.00)
+    model.expected_interface_pf_q = pe.Var(domain=pe.Reals, initialize=0.00)
+    model.interface_expected_values = pe.ConstraintList()
+    for s_o in model.scenarios_operation:
+        omega_oper = network.prob_operation_scenarios[s_o]
+        expected_pf_p += omega_oper * model.pg[ref_gen_idx, s_o]
+        expected_pf_q += omega_oper * model.qg[ref_gen_idx, s_o]
+    model.interface_expected_values.add(model.expected_interface_pf_p <= expected_pf_p + EQUALITY_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_pf_p >= expected_pf_p - EQUALITY_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_pf_q <= expected_pf_q + EQUALITY_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_pf_q >= expected_pf_q - EQUALITY_TOLERANCE)
+
+    # New objective function (PQ maps)
+    obj = 0.00
+    model.alpha = pe.Var(domain=pe.NonNegativeReals, initialize=0.00, bounds=(0.00, 1.00))
+    for s_o in model.scenarios_operation:
+        omega_oper = network.prob_operation_scenarios[s_o]
+        obj += model.alpha * model.pg[ref_gen_idx, s_o] * omega_oper
+        obj += (1 - model.alpha) * model.qg[ref_gen_idx, s_o] * omega_oper
+
+    # Regularization -- Added to OF to minimize deviations from scenarios to expected values
+    s_base = network.baseMVA
+    ref_gen_idx = network.get_reference_gen_idx()
+    model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
+    model.penalty_regularization.fix(PENALTY_REGULARIZATION)
+    for s_o in model.scenarios_operation:
+        obj += model.penalty_regularization * s_base * (model.pg[ref_gen_idx, s_o] - model.expected_interface_pf_p) ** 2
+        obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.expected_interface_pf_q) ** 2
+
+    model.objective.expr = obj
 
     return model
 
@@ -2305,7 +2359,7 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
                 sheet.cell(row=row_idx, column=3).value = 'Flex Up, [MW]'
                 sheet.cell(row=row_idx, column=4).value = s_o
                 sheet.cell(row=row_idx, column=5).value = flex_up
-                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                sheet.cell(row=row_idx, column=5).number_format = decimal_style
                 expected_flex_up[load_id] += flex_up * omega_s
                 row_idx = row_idx + 1
 
