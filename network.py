@@ -1899,7 +1899,7 @@ def _write_optimization_results_to_excel(network, data_dir, processed_results, f
     _write_network_branch_power_flow_results_to_excel(network, wb, processed_results)
     if network.params.es_reg:
         _write_network_energy_storage_results_to_excel(network, wb, processed_results)
-    # _write_relaxation_slacks_scenarios_results_to_excel(network_planning, wb, processed_results['results'])
+    _write_relaxation_slacks_scenarios_results_to_excel(network, wb, processed_results)
 
     results_filename = os.path.join(data_dir, f'{filename}_results.xlsx')
     try:
@@ -2876,16 +2876,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
             expected_values['pij'][branch_id] += pij * omega_s
             row_idx = row_idx + 1
 
-            # Pij, [%]
-            sheet.cell(row=row_idx, column=1).value = branch_id
-            sheet.cell(row=row_idx, column=2).value = branch.fbus
-            sheet.cell(row=row_idx, column=3).value = branch.tbus
-            sheet.cell(row=row_idx, column=4).value = 'P, [%]'
-            sheet.cell(row=row_idx, column=5).value = s_o
-            sheet.cell(row=row_idx, column=6).value = pij / rating
-            sheet.cell(row=row_idx, column=6).number_format = perc_style
-            row_idx = row_idx + 1
-
             # Pji, [MW]
             sheet.cell(row=row_idx, column=1).value = branch_id
             sheet.cell(row=row_idx, column=2).value = branch.tbus
@@ -2895,16 +2885,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
             sheet.cell(row=row_idx, column=6).value = pji
             sheet.cell(row=row_idx, column=6).number_format = decimal_style
             expected_values['pji'][branch_id] += pji * omega_s
-            row_idx = row_idx + 1
-
-            # Pji, [%]
-            sheet.cell(row=row_idx, column=1).value = branch_id
-            sheet.cell(row=row_idx, column=2).value = branch.tbus
-            sheet.cell(row=row_idx, column=3).value = branch.fbus
-            sheet.cell(row=row_idx, column=4).value = 'P, [%]'
-            sheet.cell(row=row_idx, column=5).value = s_o
-            sheet.cell(row=row_idx, column=6).value = pji / rating
-            sheet.cell(row=row_idx, column=6).number_format = perc_style
             row_idx = row_idx + 1
 
             # Qij, [MVAr]
@@ -2918,16 +2898,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
             expected_values['qij'][branch_id] += qij * omega_s
             row_idx = row_idx + 1
 
-            # Qij, [%]
-            sheet.cell(row=row_idx, column=1).value = branch_id
-            sheet.cell(row=row_idx, column=2).value = branch.fbus
-            sheet.cell(row=row_idx, column=3).value = branch.tbus
-            sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
-            sheet.cell(row=row_idx, column=5).value = s_o
-            sheet.cell(row=row_idx, column=6).value = qij / rating
-            sheet.cell(row=row_idx, column=6).number_format = perc_style
-            row_idx = row_idx + 1
-
             # Qji, [MW]
             sheet.cell(row=row_idx, column=1).value = branch_id
             sheet.cell(row=row_idx, column=2).value = branch.tbus
@@ -2937,16 +2907,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
             sheet.cell(row=row_idx, column=6).value = qji
             sheet.cell(row=row_idx, column=6).number_format = decimal_style
             expected_values['qji'][branch_id] += qji * omega_s
-            row_idx = row_idx + 1
-
-            # Qji, [%]
-            sheet.cell(row=row_idx, column=1).value = branch_id
-            sheet.cell(row=row_idx, column=2).value = branch.tbus
-            sheet.cell(row=row_idx, column=3).value = branch.fbus
-            sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
-            sheet.cell(row=row_idx, column=5).value = s_o
-            sheet.cell(row=row_idx, column=6).value = qji / rating
-            sheet.cell(row=row_idx, column=6).number_format = perc_style
             row_idx = row_idx + 1
 
             # Sij, [MVA]
@@ -3008,16 +2968,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
         sheet.cell(row=row_idx, column=6).number_format = decimal_style
         row_idx = row_idx + 1
 
-        # Pij, [%]
-        sheet.cell(row=row_idx, column=1).value = branch_id
-        sheet.cell(row=row_idx, column=2).value = branch.fbus
-        sheet.cell(row=row_idx, column=3).value = branch.tbus
-        sheet.cell(row=row_idx, column=4).value = 'P, [%]'
-        sheet.cell(row=row_idx, column=5).value = 'Expected'
-        sheet.cell(row=row_idx, column=6).value = expected_values['pij'][branch_id] / rating
-        sheet.cell(row=row_idx, column=6).number_format = perc_style
-        row_idx = row_idx + 1
-
         # Pji, [MW]
         sheet.cell(row=row_idx, column=1).value = branch_id
         sheet.cell(row=row_idx, column=2).value = branch.tbus
@@ -3026,16 +2976,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
         sheet.cell(row=row_idx, column=5).value = 'Expected'
         sheet.cell(row=row_idx, column=6).value = expected_values['pji'][branch_id]
         sheet.cell(row=row_idx, column=6).number_format = decimal_style
-        row_idx = row_idx + 1
-
-        # Pji, [%]
-        sheet.cell(row=row_idx, column=1).value = branch_id
-        sheet.cell(row=row_idx, column=2).value = branch.tbus
-        sheet.cell(row=row_idx, column=3).value = branch.fbus
-        sheet.cell(row=row_idx, column=4).value = 'P, [%]'
-        sheet.cell(row=row_idx, column=5).value = 'Expected'
-        sheet.cell(row=row_idx, column=6).value = expected_values['pji'][branch_id] / rating
-        sheet.cell(row=row_idx, column=6).number_format = perc_style
         row_idx = row_idx + 1
 
         # Qij, [MVAr]
@@ -3048,16 +2988,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
         sheet.cell(row=row_idx, column=6).number_format = decimal_style
         row_idx = row_idx + 1
 
-        # Qij, [%]
-        sheet.cell(row=row_idx, column=1).value = branch_id
-        sheet.cell(row=row_idx, column=2).value = branch.fbus
-        sheet.cell(row=row_idx, column=3).value = branch.tbus
-        sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
-        sheet.cell(row=row_idx, column=5).value = 'Expected'
-        sheet.cell(row=row_idx, column=6).value = expected_values['qij'][branch_id] / rating
-        sheet.cell(row=row_idx, column=6).number_format = perc_style
-        row_idx = row_idx + 1
-
         # Qji, [MVAr]
         sheet.cell(row=row_idx, column=1).value = branch_id
         sheet.cell(row=row_idx, column=2).value = branch.tbus
@@ -3066,16 +2996,6 @@ def _write_network_branch_power_flow_results_to_excel(network, workbook, results
         sheet.cell(row=row_idx, column=5).value = 'Expected'
         sheet.cell(row=row_idx, column=6).value = expected_values['qji'][branch_id]
         sheet.cell(row=row_idx, column=6).number_format = decimal_style
-        row_idx = row_idx + 1
-
-        # Qji, [%]
-        sheet.cell(row=row_idx, column=1).value = branch_id
-        sheet.cell(row=row_idx, column=2).value = branch.tbus
-        sheet.cell(row=row_idx, column=3).value = branch.fbus
-        sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
-        sheet.cell(row=row_idx, column=5).value = 'Expected'
-        sheet.cell(row=row_idx, column=6).value = expected_values['qji'][branch_id] / rating
-        sheet.cell(row=row_idx, column=6).number_format = perc_style
         row_idx = row_idx + 1
 
         # Sij, [MVA]
@@ -3279,6 +3199,122 @@ def _write_network_energy_storage_results_to_excel(network, workbook, results, n
         row_idx = row_idx + 1
 
 
+def _write_relaxation_slacks_scenarios_results_to_excel(network, workbook, results, n=0):
+
+    sheet = workbook.create_sheet('Relaxation Slacks, Operation')
+
+    row_idx = 1
+    decimal_style = '0.00'
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Resource ID'
+    sheet.cell(row=row_idx, column=2).value = 'Quantity'
+    sheet.cell(row=row_idx, column=3).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=4).value = n
+    row_idx = row_idx + 1
+
+    for s_o in results['scenarios']:
+
+        # Voltage slacks
+        if network.params.slacks.grid_operation.voltage:
+
+            for node in network.nodes:
+
+                node_id = node.bus_i
+                slack_e = results['scenarios'][s_o]['relaxation_slacks']['voltage']['e'][node_id]
+                slack_f = results['scenarios'][s_o]['relaxation_slacks']['voltage']['f'][node_id]
+
+                # - slack_e
+                sheet.cell(row=row_idx, column=1).value = node_id
+                sheet.cell(row=row_idx, column=2).value = 'Voltage, e'
+                sheet.cell(row=row_idx, column=3).value = s_o
+                sheet.cell(row=row_idx, column=4).value = slack_e
+                sheet.cell(row=row_idx, column=4).number_format = decimal_style
+                row_idx = row_idx + 1
+
+                # - slack_f
+                sheet.cell(row=row_idx, column=1).value = node_id
+                sheet.cell(row=row_idx, column=2).value = 'Voltage, f'
+                sheet.cell(row=row_idx, column=3).value = s_o
+                sheet.cell(row=row_idx, column=4).value = slack_f
+                sheet.cell(row=row_idx, column=4).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # Branch flow slacks
+        if network.params.slacks.grid_operation.branch_flow:
+
+            for branch in network.branches:
+
+                branch_id = branch.branch_id
+                iij_sqr = results['scenarios'][s_o]['relaxation_slacks']['branch_flow']['flow_ij_sqr'][branch_id]
+
+                sheet.cell(row=row_idx, column=1).value = branch_id
+                sheet.cell(row=row_idx, column=2).value = 'Flow_ij_sqr'
+                sheet.cell(row=row_idx, column=3).value = s_o
+                sheet.cell(row=row_idx, column=4).value = iij_sqr
+                sheet.cell(row=row_idx, column=4).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # Node balance
+        if network.params.slacks.node_balance:
+
+            for node in network.nodes:
+
+                node_id = node.bus_i
+                slack_p = results['scenarios'][s_o]['relaxation_slacks']['node_balance']['p'][node_id]
+                slack_q = results['scenarios'][s_o]['relaxation_slacks']['node_balance']['q'][node_id]
+
+                # - slack_p
+                sheet.cell(row=row_idx, column=1).value = node_id
+                sheet.cell(row=row_idx, column=2).value = 'Node balance, p'
+                sheet.cell(row=row_idx, column=3).value = s_o
+                sheet.cell(row=row_idx, column=4).value = slack_p
+                sheet.cell(row=row_idx, column=4).number_format = decimal_style
+                row_idx = row_idx + 1
+
+                # - slack_q
+                sheet.cell(row=row_idx, column=1).value = node_id
+                sheet.cell(row=row_idx, column=2).value = 'Node balance, q'
+                sheet.cell(row=row_idx, column=3).value = s_o
+                sheet.cell(row=row_idx, column=4).value = slack_q
+                sheet.cell(row=row_idx, column=4).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # Shared ESS
+        for shared_energy_storage in network.shared_energy_storages:
+
+            node_id = shared_energy_storage.bus
+
+            # - Complementarity
+            if network.params.slacks.shared_ess.complementarity:
+
+                comp = results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['comp'][node_id]
+
+                sheet.cell(row=row_idx, column=1).value = node_id
+                sheet.cell(row=row_idx, column=2).value = 'Shared Energy Storage, comp'
+                sheet.cell(row=row_idx, column=3).value = s_o
+                sheet.cell(row=row_idx, column=4).value = comp
+                sheet.cell(row=row_idx, column=4).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # ESS
+        if network.params.es_reg:
+
+            for energy_storage in network.energy_storages:
+
+                es_id = energy_storage.es_id
+
+                # - Complementarity
+                if network.params.slacks.ess.complementarity:
+
+                    comp = results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['comp'][es_id]
+
+                    sheet.cell(row=row_idx, column=1).value = es_id
+                    sheet.cell(row=row_idx, column=2).value = 'Energy Storage, comp'
+                    sheet.cell(row=row_idx, column=3).value = s_o
+                    sheet.cell(row=row_idx, column=4).value = comp
+                    sheet.cell(row=row_idx, column=4).number_format = decimal_style
+                    row_idx = row_idx + 1
 
 
 # ======================================================================================================================
