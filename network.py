@@ -98,6 +98,13 @@ class Network:
         print(f'[ERROR] Network {self.name}. Node {node_id} not found! Check network.')
         exit(ERROR_NETWORK_FILE)
 
+    def get_node_voltage_limits(self, node_id):
+        for node in self.nodes:
+            if node.bus_i == node_id:
+                return node.v_min, node.v_max
+        print(f'[ERROR] Network {self.name}. Node {node_id} not found! Check network.')
+        exit(ERROR_NETWORK_FILE)
+
     def node_exists(self, node_id):
         for node in self.nodes:
             if node.bus_i == node_id:
@@ -1865,7 +1872,7 @@ def _write_optimization_results_to_excel(network, data_dir, processed_results, f
 
     _write_main_info_to_excel(network, wb, processed_results)
     _write_shared_network_energy_storage_results_to_excel(network, wb, processed_results)
-    # _write_network_voltage_results_to_excel(network_planning, wb, processed_results['results'])
+    _write_network_voltage_results_to_excel(network, wb, processed_results)
     # _write_network_consumption_results_to_excel(network_planning, wb, processed_results['results'])
     # _write_network_generation_results_to_excel(network_planning, wb, processed_results['results'])
     # _write_network_branch_results_to_excel(network_planning, wb, processed_results['results'], 'losses')
@@ -2137,6 +2144,80 @@ def _write_shared_network_energy_storage_results_to_excel(network, workbook, res
         sheet.cell(row=row_idx, column=4).number_format = perc_style
         row_idx = row_idx + 1
 
+
+def _write_network_voltage_results_to_excel(network, workbook, results, n=0):
+
+    sheet = workbook.create_sheet('Voltage')
+
+    row_idx = 1
+    decimal_style = '0.00'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Node ID'
+    sheet.cell(row=row_idx, column=2).value = 'Quantity'
+    sheet.cell(row=row_idx, column=3).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=4).value = n
+    row_idx = row_idx + 1
+
+    expected_vmag = dict()
+    expected_vang = dict()
+    for node in network.nodes:
+        expected_vmag[node.bus_i] = 0.00
+        expected_vang[node.bus_i] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for node_id in results['scenarios'][s_o]['voltage']['vmag']:
+
+            v_min, v_max = network.get_node_voltage_limits(node_id)
+            v_mag = results['scenarios'][s_o]['voltage']['vmag'][node_id]
+            v_ang = results['scenarios'][s_o]['voltage']['vang'][node_id]
+
+            # Voltage magnitude
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'Vmag, [p.u.]'
+            sheet.cell(row=row_idx, column=3).value = s_o
+            sheet.cell(row=row_idx, column=4).value = v_mag
+            sheet.cell(row=row_idx, column=4).number_format = decimal_style
+            if v_mag > v_max + VIOLATION_TOLERANCE or v_mag < v_min - VIOLATION_TOLERANCE:
+                sheet.cell(row=row_idx, column=4).fill = violation_fill
+            expected_vmag[node_id] += v_mag * omega_s
+            row_idx = row_idx + 1
+
+            # Voltage angle
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'Vang, [º]'
+            sheet.cell(row=row_idx, column=3).value = s_o
+            sheet.cell(row=row_idx, column=4).value = v_ang
+            sheet.cell(row=row_idx, column=4).number_format = decimal_style
+            expected_vang[node_id] += v_ang * omega_s
+            row_idx = row_idx + 1
+
+    for node in network.nodes:
+
+        node_id = node.bus_i
+        v_min, v_max = network.get_node_voltage_limits(node_id)
+
+        # Expected voltage magnitude
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'Vmag, [p.u.]'
+        sheet.cell(row=row_idx, column=3).value = '-'
+        sheet.cell(row=row_idx, column=4).value = expected_vmag[node_id]
+        sheet.cell(row=row_idx, column=4).number_format = decimal_style
+        if expected_vmag[node_id] > v_max + VIOLATION_TOLERANCE or expected_vmag[node_id] < v_min - VIOLATION_TOLERANCE:
+            sheet.cell(row=row_idx, column=4).fill = violation_fill
+        row_idx = row_idx + 1
+
+        # Expected voltage angle
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'Vang, [º]'
+        sheet.cell(row=row_idx, column=3).value = 'Expected'
+        sheet.cell(row=row_idx, column=4).value = expected_vang[node_id]
+        sheet.cell(row=row_idx, column=4).number_format = decimal_style
+        row_idx = row_idx + 1
 
 
 # ======================================================================================================================
