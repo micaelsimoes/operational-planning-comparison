@@ -133,6 +133,24 @@ class Network:
         print(f'[ERROR] Network {self.name}. No Generator in bus {node_id} found! Check network.')
         exit(ERROR_NETWORK_FILE)
 
+    def get_gen_type(self, gen_id):
+        description = 'Unknown'
+        for gen in self.generators:
+            if gen.gen_id == gen_id:
+                if gen.gen_type == GEN_REFERENCE:
+                    description = 'Reference (TN)'
+                elif gen.gen_type == GEN_CONV:
+                    description = 'Conventional'
+                elif gen.gen_type == GEN_RES_CONTROLLABLE:
+                    description = 'RES (Generic, Controllable)'
+                elif gen.gen_type == GEN_RES_SOLAR:
+                    description = 'RES (Solar)'
+                elif gen.gen_type == GEN_RES_WIND:
+                    description = 'RES (Wind)'
+                elif gen.gen_type == GEN_RES_OTHER:
+                    description = 'RES (Generic, Non-controllable)'
+        return description
+
     def process_results(self, model, results=dict()):
         return _process_results(self, model, results=results)
 
@@ -1873,8 +1891,8 @@ def _write_optimization_results_to_excel(network, data_dir, processed_results, f
     _write_main_info_to_excel(network, wb, processed_results)
     _write_shared_network_energy_storage_results_to_excel(network, wb, processed_results)
     _write_network_voltage_results_to_excel(network, wb, processed_results)
-    # _write_network_consumption_results_to_excel(network_planning, wb, processed_results['results'])
-    # _write_network_generation_results_to_excel(network_planning, wb, processed_results['results'])
+    _write_network_consumption_results_to_excel(network, wb, processed_results)
+    _write_network_generation_results_to_excel(network, wb, processed_results)
     # _write_network_branch_results_to_excel(network_planning, wb, processed_results['results'], 'losses')
     # _write_network_branch_results_to_excel(network_planning, wb, processed_results['results'], 'ratio')
     # _write_network_branch_loading_results_to_excel(network_planning, wb, processed_results['results'])
@@ -2218,6 +2236,463 @@ def _write_network_voltage_results_to_excel(network, workbook, results, n=0):
         sheet.cell(row=row_idx, column=4).value = expected_vang[node_id]
         sheet.cell(row=row_idx, column=4).number_format = decimal_style
         row_idx = row_idx + 1
+
+
+def _write_network_consumption_results_to_excel(network, workbook, results, n=0):
+
+    sheet = workbook.create_sheet('Consumption')
+
+    row_idx = 1
+    decimal_style = '0.00'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Load ID'
+    sheet.cell(row=row_idx, column=2).value = 'Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Quantity'
+    sheet.cell(row=row_idx, column=4).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=5).value = n
+    row_idx = row_idx + 1
+
+    expected_pc = dict()
+    expected_flex_up = dict()
+    expected_flex_down = dict()
+    expected_pc_curt = dict()
+    expected_pnet = dict()
+    expected_qc = dict()
+    expected_qc_curt = dict()
+    expected_qnet = dict()
+    for load in network.loads:
+        expected_pc[load.load_id] = 0.00
+        expected_flex_up[load.load_id] = 0.00
+        expected_flex_down[load.load_id] = 0.00
+        expected_pc_curt[load.load_id] = 0.00
+        expected_pnet[load.load_id] = 0.00
+        expected_qc[load.load_id] = 0.00
+        expected_qc_curt[load.load_id] = 0.00
+        expected_qnet[load.load_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for load in network.loads:
+
+            load_id = load.load_id
+            node_id = load.bus
+
+            pc = results['scenarios'][s_o]['consumption']['pc'][load_id]
+            qc = results['scenarios'][s_o]['consumption']['qc'][load_id]
+
+            # - Active Power
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Pc, [MW]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = pc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_pc[load_id] += pc * omega_s
+            row_idx = row_idx + 1
+
+            if network.params.fl_reg:
+
+                flex_up = results['scenarios'][s_o]['consumption']['p_up'][load_id]
+                flex_down = results['scenarios'][s_o]['consumption']['p_down'][load_id]
+
+                # - Flexibility, up
+                sheet.cell(row=row_idx, column=1).value = load_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = 'Flex Up, [MW]'
+                sheet.cell(row=row_idx, column=4).value = s_o
+                sheet.cell(row=row_idx, column=5).value = flex_up
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                expected_flex_up[load_id] += flex_up * omega_s
+                row_idx = row_idx + 1
+
+                # - Flexibility, down
+                sheet.cell(row=row_idx, column=1).value = load_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = 'Flex Down, [MW]'
+                sheet.cell(row=row_idx, column=4).value = s_o
+                sheet.cell(row=row_idx, column=5).value = flex_down
+                sheet.cell(row=row_idx, column=5).number_format = decimal_style
+                expected_flex_down[load_id] += flex_down * omega_s
+                row_idx = row_idx + 1
+
+            if network.params.l_curt:
+
+                pc_curt = results['scenarios'][s_o]['consumption']['pc_curt'][load_id]
+
+                # - Active power curtailment
+                sheet.cell(row=row_idx, column=1).value = load_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = 'Pc_curt, [MW]'
+                sheet.cell(row=row_idx, column=4).value = s_o
+                sheet.cell(row=row_idx, column=5).value = pc_curt
+                sheet.cell(row=row_idx, column=5).number_format = decimal_style
+                if not isclose(pc_curt, 0.00, abs_tol= VIOLATION_TOLERANCE):
+                    sheet.cell(row=row_idx, column=5).fill = violation_fill
+                expected_pc_curt[load_id] += pc_curt * omega_s
+                row_idx = row_idx + 1
+
+            if network.params.fl_reg or network.params.l_curt:
+
+                p_net = results['scenarios'][s_o]['consumption']['pc_net'][load_id]
+
+                # - Active power net consumption
+                sheet.cell(row=row_idx, column=1).value = load_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = 'Pc_net, [MW]'
+                sheet.cell(row=row_idx, column=4).value = s_o
+                sheet.cell(row=row_idx, column=5).value = p_net
+                sheet.cell(row=row_idx, column=5).number_format = decimal_style
+                expected_pnet[load_id] += p_net * omega_s
+                row_idx = row_idx + 1
+
+            # - Reactive power
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Qc, [MVAr]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = qc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_qc[load_id] += qc * omega_s
+            row_idx = row_idx + 1
+
+            if network.params.l_curt:
+
+                qc_curt = results['scenarios'][s_o]['consumption']['qc_curt'][load_id]
+                q_net = results['scenarios'][s_o]['consumption']['qc_net'][load_id]
+
+                # - Reactive power curtailment
+                sheet.cell(row=row_idx, column=1).value = load_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = 'Qc_curt, [MW]'
+                sheet.cell(row=row_idx, column=4).value = s_o
+                sheet.cell(row=row_idx, column=5).value = qc_curt
+                sheet.cell(row=row_idx, column=5).number_format = decimal_style
+                if not isclose(qc_curt, 0.00, abs_tol=VIOLATION_TOLERANCE):
+                    sheet.cell(row=row_idx, column=5).fill = violation_fill
+                expected_qc_curt[load_id] += qc_curt * omega_s
+                row_idx = row_idx + 1
+
+                # - Reactive power net consumption
+                sheet.cell(row=row_idx, column=1).value = load_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = 'Qc_net, [MW]'
+                sheet.cell(row=row_idx, column=4).value = s_o
+                sheet.cell(row=row_idx, column=5).value = q_net
+                sheet.cell(row=row_idx, column=5).number_format = decimal_style
+                expected_qnet[load_id] += q_net * omega_s
+                row_idx = row_idx + 1
+
+    for load in network.loads:
+
+        load_id = load.load_id
+        node_id = load.bus
+
+        # - Active Power
+        sheet.cell(row=row_idx, column=1).value = load_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = 'Pc, [MW]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_pc[load_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        if network.params.fl_reg:
+
+            # - Flexibility, up
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Flex Up, [MW]'
+            sheet.cell(row=row_idx, column=4).value = 'Expected'
+            sheet.cell(row=row_idx, column=5).value = expected_flex_up[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            row_idx = row_idx + 1
+
+            # - Flexibility, down
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Flex Down, [MW]'
+            sheet.cell(row=row_idx, column=4).value = 'Expected'
+            sheet.cell(row=row_idx, column=5).value = expected_flex_down[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        if network.params.l_curt:
+
+            # - Load curtailment (active power)
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Pc_curt, [MW]'
+            sheet.cell(row=row_idx, column=4).value = 'Expected'
+            sheet.cell(row=row_idx, column=5).value = expected_pc_curt[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if not isclose(expected_pc_curt[load_id], 0.00, abs_tol=VIOLATION_TOLERANCE):
+                sheet.cell(row=row_idx, column=p + 8).fill = violation_fill
+            row_idx = row_idx + 1
+
+        if network.params.fl_reg or network.params.l_curt:
+
+            # - Active power net consumption
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Pc_net, [MW]'
+            sheet.cell(row=row_idx, column=4).value = 'Expected'
+            sheet.cell(row=row_idx, column=5).value = expected_pnet[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        # - Reactive power
+        sheet.cell(row=row_idx, column=1).value = load_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = 'Qc, [MVAr]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        for p in range(network.num_instants):
+            sheet.cell(row=row_idx, column=5).value = expected_qc[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        if network.params.l_curt:
+
+            # - Load curtailment (reactive power)
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Qc_curt, [MW]'
+            sheet.cell(row=row_idx, column=4).value = 'Expected'
+            sheet.cell(row=row_idx, column=5).value = expected_qc_curt[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if not isclose(expected_qc_curt[load_id], 0.00, abs_tol=VIOLATION_TOLERANCE):
+                sheet.cell(row=row_idx, column=5).fill = violation_fill
+            row_idx = row_idx + 1
+
+            # - Reactive power net consumption
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Qc_net, [MW]'
+            sheet.cell(row=row_idx, column=4).value = 'Expected'
+            sheet.cell(row=row_idx, column=5).value = expected_qnet[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            row_idx = row_idx + 1
+
+
+def _write_network_generation_results_to_excel(network, workbook, results, n=0):
+
+    sheet = workbook.create_sheet('Generation')
+
+    row_idx = 1
+    decimal_style = '0.00'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Generator ID'
+    sheet.cell(row=row_idx, column=2).value = 'Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Type'
+    sheet.cell(row=row_idx, column=4).value = 'Quantity'
+    sheet.cell(row=row_idx, column=5).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=6).value = n
+    row_idx = row_idx + 1
+
+    expected_pg = dict()
+    expected_pg_net = dict()
+    expected_qg = dict()
+    expected_qg_net = dict()
+    expected_sg = dict()
+    expected_sg_curt = dict()
+    expected_sg_net = dict()
+    for generator in network.generators:
+        expected_pg[generator.gen_id] = 0.00
+        expected_pg_net[generator.gen_id] = 0.00
+        expected_qg[generator.gen_id] = 0.00
+        expected_qg_net[generator.gen_id] = 0.00
+        expected_sg[generator.gen_id] = 0.00
+        expected_sg_curt[generator.gen_id] = 0.00
+        expected_sg_net[generator.gen_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for generator in network.generators:
+
+            gen_id = generator.gen_id
+            node_id = generator.bus
+            gen_type = network.get_gen_type(gen_id)
+
+            pg = results['scenarios'][s_o]['generation']['pg'][gen_id]
+            qg = results['scenarios'][s_o]['generation']['qg'][gen_id]
+
+            # Active Power
+            sheet.cell(row=row_idx, column=1).value = gen_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = gen_type
+            sheet.cell(row=row_idx, column=4).value = 'Pg, [MW]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = pg
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_pg[gen_id] += pg * omega_s
+            row_idx = row_idx + 1
+
+            # Active Power net
+            if generator.is_curtaillable() and network.params.rg_curt:
+
+                pg_net = results['scenarios'][s_o]['generation']['pg_net'][gen_id]
+
+                sheet.cell(row=row_idx, column=1).value = gen_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = gen_type
+                sheet.cell(row=row_idx, column=4).value = 'Pg_net, [MW]'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = pg_net
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                expected_pg_net[gen_id] += pg_net * omega_s
+                row_idx = row_idx + 1
+
+            # Reactive Power
+            sheet.cell(row=row_idx, column=1).value = gen_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = gen_type
+            sheet.cell(row=row_idx, column=4).value = 'Qg, [MVAr]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = qg
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_qg[gen_id] += qg * omega_s
+            row_idx = row_idx + 1
+
+            # Reactive Power net
+            if generator.is_curtaillable() and network.params.rg_curt:
+
+                qg_net = results['scenarios'][s_o]['generation']['qg_net'][gen_id]
+
+                sheet.cell(row=row_idx, column=1).value = gen_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = gen_type
+                sheet.cell(row=row_idx, column=4).value = 'Qg_net, [MVAr]'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = qg_net
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                expected_qg_net[gen_id] += qg_net * omega_s
+                row_idx = row_idx + 1
+
+            # Apparent Power
+            if generator.is_curtaillable() and network.params.rg_curt:
+
+                sg = results['scenarios'][s_o]['generation']['sg'][gen_id]
+                sg_curt = results['scenarios'][s_o]['generation']['sg_curt'][gen_id]
+                sg_net = results['scenarios'][s_o]['generation']['sg_net'][gen_id]
+
+                sheet.cell(row=row_idx, column=1).value = gen_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = gen_type
+                sheet.cell(row=row_idx, column=4).value = 'Sg, [MVA]'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = sg
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                expected_sg[gen_id] += sg * omega_s
+                row_idx = row_idx + 1
+
+                # Apparent Power net
+                sheet.cell(row=row_idx, column=1).value = gen_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = gen_type
+                sheet.cell(row=row_idx, column=4).value = 'Qg_net, [MVAr]'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = sg_curt
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                expected_sg_curt[gen_id] += sg_curt * omega_s
+                row_idx = row_idx + 1
+
+                # Apparent Power net
+                sheet.cell(row=row_idx, column=1).value = gen_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = gen_type
+                sheet.cell(row=row_idx, column=4).value = 'Qg_net, [MVAr]'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = sg_net
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                expected_sg_net[gen_id] += sg_net * omega_s
+                row_idx = row_idx + 1
+
+    for generator in network.generators:
+
+        node_id = generator.bus
+        gen_id = generator.gen_id
+        gen_type = network.get_gen_type(gen_id)
+
+        # Active Power
+        sheet.cell(row=row_idx, column=1).value = gen_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = gen_type
+        sheet.cell(row=row_idx, column=4).value = 'Pg, [MW]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_pg[gen_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Active Power net
+        if generator.is_curtaillable() and network.params.rg_curt:
+            sheet.cell(row=row_idx, column=1).value = gen_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = gen_type
+            sheet.cell(row=row_idx, column=4).value = 'Pg_net, [MW]'
+            sheet.cell(row=row_idx, column=5).value = 'Expected'
+            sheet.cell(row=row_idx, column=6).value = expected_pg_net[gen_id]
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        # Reactive Power
+        sheet.cell(row=row_idx, column=1).value = gen_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = gen_type
+        sheet.cell(row=row_idx, column=4).value = 'Qg, [MVAr]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_qg[gen_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Reactive Power net
+        if generator.is_curtaillable() and network.params.rg_curt:
+
+            sheet.cell(row=row_idx, column=1).value = gen_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = gen_type
+            sheet.cell(row=row_idx, column=4).value = 'Qg_net, [MVAr]'
+            sheet.cell(row=row_idx, column=5).value = 'Expected'
+            sheet.cell(row=row_idx, column=6).value = expected_qg_net[gen_id]
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        # Apparent Power
+        if generator.is_curtaillable() and network.params.rg_curt:
+
+            sheet.cell(row=row_idx, column=1).value = gen_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = gen_type
+            sheet.cell(row=row_idx, column=4).value = 'Sg, [MVA]'
+            sheet.cell(row=row_idx, column=5).value = 'Expected'
+            sheet.cell(row=row_idx, column=6).value = expected_sg[gen_id]
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            row_idx = row_idx + 1
+
+            sheet.cell(row=row_idx, column=1).value = gen_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = gen_type
+            sheet.cell(row=row_idx, column=4).value = 'Sg_curt, [MVA]'
+            sheet.cell(row=row_idx, column=5).value = 'Expected'
+            sheet.cell(row=row_idx, column=6).value = expected_sg_curt[gen_id]
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            row_idx = row_idx + 1
+
+            sheet.cell(row=row_idx, column=1).value = gen_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = gen_type
+            sheet.cell(row=row_idx, column=4).value = 'Sg_net, [MVA]'
+            sheet.cell(row=row_idx, column=5).value = 'Expected'
+            sheet.cell(row=row_idx, column=6).value = expected_sg_net[gen_id]
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            row_idx = row_idx + 1
+
 
 
 # ======================================================================================================================
