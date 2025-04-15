@@ -61,9 +61,10 @@ if __name__ == '__main__':
     operational_planning.read_case_study()
 
     operational_planning.transmission_network.run_opf()
-    for distribution_network in operational_planning.distribution_networks:
+    for node_id in operational_planning.distribution_networks:
+        distribution_network = operational_planning.distribution_networks[node_id]
         distribution_network.run_opf()
 
-    operational_planning.run_hierarchical_coordination()
+    # operational_planning.run_hierarchical_coordination()
 
 
