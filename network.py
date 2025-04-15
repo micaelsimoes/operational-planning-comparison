@@ -1893,12 +1893,12 @@ def _write_optimization_results_to_excel(network, data_dir, processed_results, f
     _write_network_voltage_results_to_excel(network, wb, processed_results)
     _write_network_consumption_results_to_excel(network, wb, processed_results)
     _write_network_generation_results_to_excel(network, wb, processed_results)
-    # _write_network_branch_results_to_excel(network_planning, wb, processed_results['results'], 'losses')
-    # _write_network_branch_results_to_excel(network_planning, wb, processed_results['results'], 'ratio')
-    # _write_network_branch_loading_results_to_excel(network_planning, wb, processed_results['results'])
-    # _write_network_branch_power_flow_results_to_excel(network_planning, wb, processed_results['results'])
-    # if network_planning.params.es_reg:
-    #     _write_network_energy_storage_results_to_excel(network_planning, wb, processed_results['results'])
+    _write_network_branch_results_to_excel(network, wb, processed_results, 'losses')
+    _write_network_branch_results_to_excel(network, wb, processed_results, 'ratio')
+    _write_network_branch_loading_results_to_excel(network, wb, processed_results)
+    _write_network_branch_power_flow_results_to_excel(network, wb, processed_results)
+    if network.params.es_reg:
+        _write_network_energy_storage_results_to_excel(network, wb, processed_results)
     # _write_relaxation_slacks_scenarios_results_to_excel(network_planning, wb, processed_results['results'])
 
     results_filename = os.path.join(data_dir, f'{filename}_results.xlsx')
@@ -2692,6 +2692,592 @@ def _write_network_generation_results_to_excel(network, workbook, results, n=0):
             sheet.cell(row=row_idx, column=6).value = expected_sg_net[gen_id]
             sheet.cell(row=row_idx, column=6).number_format = decimal_style
             row_idx = row_idx + 1
+
+
+def _write_network_branch_results_to_excel(network, workbook, results, result_type, n=0):
+
+    sheet_name = str()
+    aux_string = str()
+    if result_type == 'losses':
+        sheet_name = 'Branch Losses'
+        aux_string = 'P, [MW]'
+    elif result_type == 'ratio':
+        sheet_name = 'Transformer Ratio'
+        aux_string = 'Ratio'
+
+    row_idx = 1
+    decimal_style = '0.00'
+
+    sheet = workbook.create_sheet(sheet_name)
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Branch ID'
+    sheet.cell(row=row_idx, column=2).value = 'From Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'To Node ID'
+    sheet.cell(row=row_idx, column=4).value = 'Quantity'
+    sheet.cell(row=row_idx, column=5).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=6).value = n
+    row_idx = row_idx + 1
+
+    expected_values = dict()
+    for branch in network.branches:
+        expected_values[branch.branch_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for branch in network.branches:
+
+            branch_id = branch.branch_id
+
+            if not(result_type == 'ratio' and not branch.is_transformer):
+
+                value = results['scenarios'][s_o]['branches'][result_type][branch_id]
+
+                sheet.cell(row=row_idx, column=1).value = branch_id
+                sheet.cell(row=row_idx, column=2).value = branch.fbus
+                sheet.cell(row=row_idx, column=3).value = branch.tbus
+                sheet.cell(row=row_idx, column=4).value = aux_string
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = value
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                expected_values[branch_id] += value * omega_s
+                row_idx = row_idx + 1
+
+    for branch in network.branches:
+
+        branch_id = branch.branch_id
+
+        if not (result_type == 'ratio' and not branch.is_transformer):
+
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = aux_string
+            sheet.cell(row=row_idx, column=5).value = 'Expected'
+            sheet.cell(row=row_idx, column=6).value = expected_values[branch_id]
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            row_idx = row_idx + 1
+
+
+def _write_network_branch_loading_results_to_excel(network, workbook, results, n=0):
+
+    sheet = workbook.create_sheet('Branch Loading')
+
+    row_idx = 1
+    perc_style = '0.00%'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Branch ID'
+    sheet.cell(row=row_idx, column=2).value = 'From Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'To Node ID'
+    sheet.cell(row=row_idx, column=4).value = 'Quantity'
+    sheet.cell(row=row_idx, column=5).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=6).value = n
+    row_idx = row_idx + 1
+
+    expected_values = {'flow_ij': {}}
+    for branch in network.branches:
+        expected_values['flow_ij'][branch.branch_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for branch in network.branches:
+
+            value = results['scenarios'][s_o]['branches']['branch_flow']['flow_ij_perc'][branch.branch_id]
+
+            # flow ij, [%]
+            sheet.cell(row=row_idx, column=1).value = branch.branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = 'Flow_ij, [%]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = value
+            sheet.cell(row=row_idx, column=6).number_format = perc_style
+            if value > 1.00 + VIOLATION_TOLERANCE:
+                sheet.cell(row=row_idx, column=6).fill = violation_fill
+            expected_values['flow_ij'][branch.branch_id] += value * omega_s
+            row_idx = row_idx + 1
+
+    for branch in network.branches:
+
+        value = expected_values['flow_ij'][branch.branch_id]
+
+        # flow ij, [%]
+        sheet.cell(row=row_idx, column=1).value = branch.branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.fbus
+        sheet.cell(row=row_idx, column=3).value = branch.tbus
+        sheet.cell(row=row_idx, column=4).value = 'Flow_ij, [%]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = value
+        sheet.cell(row=row_idx, column=6).number_format = perc_style
+        if value > 1.00 + VIOLATION_TOLERANCE:
+            sheet.cell(row=row_idx, column=6).fill = violation_fill
+        row_idx = row_idx + 1
+
+
+def _write_network_branch_power_flow_results_to_excel(network, workbook, results, n=0):
+
+    sheet = workbook.create_sheet('Power Flows')
+
+    row_idx = 1
+    decimal_style = '0.00'
+    perc_style = '0.00%'
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'BranchID'
+    sheet.cell(row=row_idx, column=2).value = 'From Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'To Node ID'
+    sheet.cell(row=row_idx, column=4).value = 'Quantity'
+    sheet.cell(row=row_idx, column=5).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=6).value = n
+    row_idx = row_idx + 1
+
+    expected_values = {'pij': {}, 'pji': {}, 'qij': {}, 'qji': {}, 'sij': {}, 'sji': {}}
+    for branch in network.branches:
+        branch_id = branch.branch_id
+        expected_values['pij'][branch_id] = 0.00
+        expected_values['pji'][branch_id] = 0.00
+        expected_values['qij'][branch_id] = 0.00
+        expected_values['qji'][branch_id] = 0.00
+        expected_values['sij'][branch_id] = 0.00
+        expected_values['sji'][branch_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for branch in network.branches:
+
+            branch_id = branch.branch_id
+            rating = branch.rate
+            if rating == 0.0:
+                rating = BRANCH_UNKNOWN_RATING
+
+            pij = results['scenarios'][s_o]['branches']['power_flow']['pij'][branch_id]
+            pji = results['scenarios'][s_o]['branches']['power_flow']['pji'][branch_id]
+            qij = results['scenarios'][s_o]['branches']['power_flow']['qij'][branch_id]
+            qji = results['scenarios'][s_o]['branches']['power_flow']['qji'][branch_id]
+            sij = results['scenarios'][s_o]['branches']['power_flow']['sij'][branch_id]
+            sji = results['scenarios'][s_o]['branches']['power_flow']['sji'][branch_id]
+
+            # Pij, [MW]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = pij
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_values['pij'][branch_id] += pij * omega_s
+            row_idx = row_idx + 1
+
+            # Pij, [%]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = 'P, [%]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = pij / rating
+            sheet.cell(row=row_idx, column=6).number_format = perc_style
+            row_idx = row_idx + 1
+
+            # Pji, [MW]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.tbus
+            sheet.cell(row=row_idx, column=3).value = branch.fbus
+            sheet.cell(row=row_idx, column=4).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = pji
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_values['pji'][branch_id] += pji * omega_s
+            row_idx = row_idx + 1
+
+            # Pji, [%]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.tbus
+            sheet.cell(row=row_idx, column=3).value = branch.fbus
+            sheet.cell(row=row_idx, column=4).value = 'P, [%]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = pji / rating
+            sheet.cell(row=row_idx, column=6).number_format = perc_style
+            row_idx = row_idx + 1
+
+            # Qij, [MVAr]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = qij
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_values['qij'][branch_id] += qij * omega_s
+            row_idx = row_idx + 1
+
+            # Qij, [%]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = qij / rating
+            sheet.cell(row=row_idx, column=6).number_format = perc_style
+            row_idx = row_idx + 1
+
+            # Qji, [MW]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.tbus
+            sheet.cell(row=row_idx, column=3).value = branch.fbus
+            sheet.cell(row=row_idx, column=4).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = qji
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_values['qji'][branch_id] += qji * omega_s
+            row_idx = row_idx + 1
+
+            # Qji, [%]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.tbus
+            sheet.cell(row=row_idx, column=3).value = branch.fbus
+            sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = qji / rating
+            sheet.cell(row=row_idx, column=6).number_format = perc_style
+            row_idx = row_idx + 1
+
+            # Sij, [MVA]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = sij
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_values['sij'][branch_id] += sij * omega_s
+            row_idx = row_idx + 1
+
+            # Sij, [%]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.fbus
+            sheet.cell(row=row_idx, column=3).value = branch.tbus
+            sheet.cell(row=row_idx, column=4).value = 'S, [%]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = sij / rating
+            sheet.cell(row=row_idx, column=6).number_format = perc_style
+            row_idx = row_idx + 1
+
+            # Sji, [MW]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.tbus
+            sheet.cell(row=row_idx, column=3).value = branch.fbus
+            sheet.cell(row=row_idx, column=4).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = sji
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_values['sji'][branch_id]+= sji * omega_s
+            row_idx = row_idx + 1
+
+            # Sji, [%]
+            sheet.cell(row=row_idx, column=1).value = branch_id
+            sheet.cell(row=row_idx, column=2).value = branch.tbus
+            sheet.cell(row=row_idx, column=3).value = branch.fbus
+            sheet.cell(row=row_idx, column=4).value = 'S, [%]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = sji / rating
+            sheet.cell(row=row_idx, column=6).number_format = perc_style
+            row_idx = row_idx + 1
+
+    for branch in network.branches:
+
+        branch_id = branch.branch_id
+        rating = branch.rate
+        if rating == 0.0:
+            rating = BRANCH_UNKNOWN_RATING
+
+        # Pij, [MW]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.fbus
+        sheet.cell(row=row_idx, column=3).value = branch.tbus
+        sheet.cell(row=row_idx, column=4).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['pij'][branch_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Pij, [%]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.fbus
+        sheet.cell(row=row_idx, column=3).value = branch.tbus
+        sheet.cell(row=row_idx, column=4).value = 'P, [%]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['pij'][branch_id] / rating
+        sheet.cell(row=row_idx, column=6).number_format = perc_style
+        row_idx = row_idx + 1
+
+        # Pji, [MW]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.tbus
+        sheet.cell(row=row_idx, column=3).value = branch.fbus
+        sheet.cell(row=row_idx, column=4).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['pji'][branch_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Pji, [%]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.tbus
+        sheet.cell(row=row_idx, column=3).value = branch.fbus
+        sheet.cell(row=row_idx, column=4).value = 'P, [%]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['pji'][branch_id] / rating
+        sheet.cell(row=row_idx, column=6).number_format = perc_style
+        row_idx = row_idx + 1
+
+        # Qij, [MVAr]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.fbus
+        sheet.cell(row=row_idx, column=3).value = branch.tbus
+        sheet.cell(row=row_idx, column=4).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['qij'][branch_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Qij, [%]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.fbus
+        sheet.cell(row=row_idx, column=3).value = branch.tbus
+        sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['qij'][branch_id] / rating
+        sheet.cell(row=row_idx, column=6).number_format = perc_style
+        row_idx = row_idx + 1
+
+        # Qji, [MVAr]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.tbus
+        sheet.cell(row=row_idx, column=3).value = branch.fbus
+        sheet.cell(row=row_idx, column=4).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['qji'][branch_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Qji, [%]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.tbus
+        sheet.cell(row=row_idx, column=3).value = branch.fbus
+        sheet.cell(row=row_idx, column=4).value = 'Q, [%]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['qji'][branch_id] / rating
+        sheet.cell(row=row_idx, column=6).number_format = perc_style
+        row_idx = row_idx + 1
+
+        # Sij, [MVA]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.fbus
+        sheet.cell(row=row_idx, column=3).value = branch.tbus
+        sheet.cell(row=row_idx, column=4).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['sij'][branch_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Sij, [%]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.fbus
+        sheet.cell(row=row_idx, column=3).value = branch.tbus
+        sheet.cell(row=row_idx, column=4).value = 'S, [%]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['sij'][branch_id] / rating
+        sheet.cell(row=row_idx, column=6).number_format = perc_style
+        row_idx = row_idx + 1
+
+        # Sji, [MVA]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.tbus
+        sheet.cell(row=row_idx, column=3).value = branch.fbus
+        sheet.cell(row=row_idx, column=4).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['sji'][branch_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Sji, [%]
+        sheet.cell(row=row_idx, column=1).value = branch_id
+        sheet.cell(row=row_idx, column=2).value = branch.tbus
+        sheet.cell(row=row_idx, column=3).value = branch.fbus
+        sheet.cell(row=row_idx, column=4).value = 'S, [%]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_values['sji'][branch_id] / rating
+        sheet.cell(row=row_idx, column=6).number_format = perc_style
+        row_idx = row_idx + 1
+
+
+def _write_network_energy_storage_results_to_excel(network, workbook, results, n=0):
+
+    sheet = workbook.create_sheet('Energy Storage')
+
+    row_idx = 1
+    decimal_style = '0.00'
+    perc_style = '0.00%'
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'ESS ID'
+    sheet.cell(row=row_idx, column=2).value = 'Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Quantity'
+    sheet.cell(row=row_idx, column=4).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=5).value = n
+    row_idx = row_idx + 1
+
+    expected_p = dict()
+    expected_q = dict()
+    expected_s = dict()
+    expected_soc = dict()
+    expected_soc_perc = dict()
+    for energy_storage in network.energy_storages:
+        es_id = energy_storage.es_id
+        expected_p[es_id] = 0.00
+        expected_q[es_id] = 0.00
+        expected_s[es_id] = 0.00
+        expected_soc[es_id] = 0.00
+        expected_soc_perc[es_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for energy_storage in network.energy_storages:
+
+            es_id = energy_storage.es_id
+            node_id = energy_storage.bus
+
+            pc = results['scenarios'][s_o]['energy_storages']['p'][es_id]
+            qc = results['scenarios'][s_o]['energy_storages']['q'][es_id]
+            sc = results['scenarios'][s_o]['energy_storages']['s'][es_id]
+            soc = results['scenarios'][s_o]['energy_storages']['soc'][es_id]
+            soc_perc = results['scenarios'][s_o]['energy_storages']['soc_percent'][es_id]
+
+            # - Active Power
+            sheet.cell(row=row_idx, column=1).value = es_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = pc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if pc != 'N/A':
+                expected_p[es_id] += pc * omega_s
+            else:
+                expected_p[es_id] = 'N/A'
+            row_idx = row_idx + 1
+
+            # - Reactive Power
+            sheet.cell(row=row_idx, column=1).value = es_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = qc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if qc != 'N/A':
+                expected_q[es_id] += qc * omega_s
+            else:
+                expected_q[es_id] = 'N/A'
+            row_idx = row_idx + 1
+
+            # - Apparent Power
+            sheet.cell(row=row_idx, column=1).value = es_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = sc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if sc != 'N/A':
+                expected_s[es_id] += sc * omega_s
+            else:
+                expected_s[es_id] = 'N/A'
+            row_idx = row_idx + 1
+
+            # - SoC, [MWh]
+            sheet.cell(row=row_idx, column=1).value = es_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'SoC, [MWh]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = soc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if soc != 'N/A':
+                expected_soc[es_id] += soc * omega_s
+            else:
+                expected_soc[es_id] = 'N/A'
+            row_idx = row_idx + 1
+
+            # - SoC, [%]
+            sheet.cell(row=row_idx, column=1).value = es_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'SoC, [%]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = soc_perc
+            sheet.cell(row=row_idx, column=5).number_format = perc_style
+            if soc_perc != 'N/A':
+                expected_soc_perc[es_id] += soc_perc * omega_s
+            else:
+                expected_soc_perc[es_id] = 'N/A'
+            row_idx = row_idx + 1
+
+    for energy_storage in network.energy_storages:
+
+        es_id = energy_storage.es_id
+        node_id = energy_storage.bus
+
+        # - Active Power
+        sheet.cell(row=row_idx, column=1).value = es_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_p[es_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # - Reactive Power
+        sheet.cell(row=row_idx, column=1).value = es_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_q[es_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # - Apparent Power
+        sheet.cell(row=row_idx, column=1).value = es_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_s[es_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # - SoC, [MWh]
+        sheet.cell(row=row_idx, column=1).value = es_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = 'SoC, [MWh]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_soc[es_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # - SoC, [%]
+        sheet.cell(row=row_idx, column=1).value = es_id
+        sheet.cell(row=row_idx, column=2).value = node_id
+        sheet.cell(row=row_idx, column=3).value = 'SoC, [%]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_soc_perc[es_id]
+        sheet.cell(row=row_idx, column=5).number_format = perc_style
+        row_idx = row_idx + 1
+
 
 
 
