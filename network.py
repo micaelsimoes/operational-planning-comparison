@@ -48,6 +48,10 @@ class Network:
 
     def determine_pq_map(self, num_steps=12):
         model = _build_pq_map_model(self)
+        for n in range(0, num_steps + 1):
+            alpha = 1 - (n / num_steps)
+            beta = 1 - alpha
+            print('{:.3f} \t {:.3f}'.format(alpha, beta))
 
     def build_model(self):
         _pre_process_network(self)
