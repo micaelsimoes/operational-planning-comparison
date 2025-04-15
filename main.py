@@ -60,6 +60,10 @@ if __name__ == '__main__':
     operational_planning = OperationalPlanning(directory, filename)
     operational_planning.read_case_study()
 
+    operational_planning.transmission_network.run_opf()
+    for distribution_network in operational_planning.distribution_networks:
+        distribution_network.run_opf()
+
     operational_planning.run_hierarchical_coordination()
 
 
