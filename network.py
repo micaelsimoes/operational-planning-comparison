@@ -1,8 +1,11 @@
 import os
+import numpy as np
 import pandas as pd
 import pyomo.opt as po
 import pyomo.environ as pe
 from math import acos, sqrt, tan, atan2, pi, isclose
+import matplotlib.pyplot as plt
+from scipy.spatial import ConvexHull
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 from node import Node
@@ -40,22 +43,25 @@ class Network:
         self.active_distribution_network_nodes = list()
         self.params = NetworkParameters()
 
-    def run_opf(self):
-        model = self.build_model()
-        results = self.optimize(model)
-        processed_results = self.process_results(model, results)
-        self.write_optimization_results_to_excel(processed_results)
+    def determine_pq_map(self, t=0, num_steps=4):
+        vertices = _get_pq_map_vertices(self, t=t, num_steps=num_steps)
+        hull = ConvexHull(vertices)
+        hull_vertices = vertices[hull.vertices]
+        inequalities = _get_pq_map_inequalities(hull_vertices)
+        print("\nPQ Map Inequalities (ax + by <= c):")
+        for n, (pg, qg, const) in enumerate(inequalities):
+            print(f"Edge {n + 1}: {pg:.3f}*Pg + {qg:.3f}*Qg <= {const:.3f}")
+        _plot_pq_map(self, t, num_steps, vertices, hull, hull_vertices)
 
-    def determine_pq_map(self, num_steps=12):
-        model = _build_pq_map_model(self)
-        for n in range(0, num_steps + 1):
-            alpha = 1 - (n / num_steps)
-            beta = 1 - alpha
-            print('{:.3f} \t {:.3f}'.format(alpha, beta))
+    def determine_pq_map_v2(self, t=0):
+        print(self.name)
 
-    def build_model(self):
+    def get_interface_power_flow(self, model):
+        return _get_interface_power_flow(self, model)
+
+    def build_model(self, t):
         _pre_process_network(self)
-        return _build_model(self)
+        return _build_model(self, t=t)
 
     def optimize(self, model, from_warm_start=False):
         return _optimize(self, model, from_warm_start=from_warm_start)
@@ -187,7 +193,7 @@ class Network:
 # ======================================================================================================================
 #   NETWORK optimization functions
 # ======================================================================================================================
-def _build_model(network, n=0):
+def _build_model(network, t):
 
     network.compute_series_admittance()
 
@@ -259,7 +265,7 @@ def _build_model(network, n=0):
         pg_ub, pg_lb = generator.pmax, generator.pmin
         qg_ub, qg_lb = generator.qmax, generator.qmin
         for s_o in model.scenarios_operation:
-            if generator.status[n]:
+            if generator.status[t]:
                 model.pg[g, s_o] = max(pg_lb, 0.00)
                 model.qg[g, s_o] = max(qg_lb, 0.00)
                 model.pg[g, s_o].setub(pg_ub)
@@ -281,8 +287,8 @@ def _build_model(network, n=0):
                 if generator.is_curtaillable():
                     # - Renewable Generation
                     init_sg = 0.0
-                    if generator.status[n]:
-                        init_sg = sqrt(generator.pg[s_o][n] ** 2 + generator.qg[s_o][n] ** 2)
+                    if generator.status[t]:
+                        init_sg = sqrt(generator.pg[s_o][t] ** 2 + generator.qg[s_o][t] ** 2)
                     model.sg_abs[g, s_o].setub(init_sg)
                     model.sg_sqr[g, s_o].setub(init_sg ** 2)
                     model.sg_curt[g, s_o].setub(init_sg)
@@ -312,10 +318,10 @@ def _build_model(network, n=0):
     for c in model.loads:
         load = network.loads[c]
         for s_o in model.scenarios_operation:
-            model.pc[c, s_o].setub(load.pd[s_o][n] + EQUALITY_TOLERANCE)
-            model.pc[c, s_o].setlb(load.pd[s_o][n] - EQUALITY_TOLERANCE)
-            model.qc[c, s_o].setub(load.qd[s_o][n] + EQUALITY_TOLERANCE)
-            model.qc[c, s_o].setlb(load.qd[s_o][n] - EQUALITY_TOLERANCE)
+            model.pc[c, s_o].setub(load.pd[s_o][t] + EQUALITY_TOLERANCE)
+            model.pc[c, s_o].setlb(load.pd[s_o][t] - EQUALITY_TOLERANCE)
+            model.qc[c, s_o].setub(load.qd[s_o][t] + EQUALITY_TOLERANCE)
+            model.qc[c, s_o].setlb(load.qd[s_o][t] - EQUALITY_TOLERANCE)
     if params.fl_reg:
         model.flex_p_up = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
         model.flex_p_down = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
@@ -323,8 +329,8 @@ def _build_model(network, n=0):
             load = network.loads[c]
             for s_o in model.scenarios_operation:
                 if load.fl_reg:
-                    flex_up = load.flexibility.upward[n]
-                    flex_down = load.flexibility.downward[n]
+                    flex_up = load.flexibility.upward[t]
+                    flex_down = load.flexibility.downward[t]
                     model.flex_p_up[c, s_o].setub(abs(flex_up))
                     model.flex_p_down[c, s_o].setub(abs(flex_down))
                 else:
@@ -338,18 +344,18 @@ def _build_model(network, n=0):
         for c in model.loads:
             load = network.loads[c]
             for s_o in model.scenarios_operation:
-                if load.pd[s_o][n] >= 0.00:
-                    model.pc_curt_down[c, s_o].setub(abs(load.pd[s_o][n]))
+                if load.pd[s_o][t] >= 0.00:
+                    model.pc_curt_down[c, s_o].setub(abs(load.pd[s_o][t]))
                     model.pc_curt_up[c, s_o].setub(EQUALITY_TOLERANCE)
                 else:
-                    model.pc_curt_up[c, s_o].setub(abs(load.pd[s_o][n]))
+                    model.pc_curt_up[c, s_o].setub(abs(load.pd[s_o][t]))
                     model.pc_curt_down[c, s_o].setub(EQUALITY_TOLERANCE)
 
-                if load.qd[s_o][n] >= 0.00:
-                    model.qc_curt_down[c, s_o].setub(abs(load.qd[s_o][n]))
+                if load.qd[s_o][t] >= 0.00:
+                    model.qc_curt_down[c, s_o].setub(abs(load.qd[s_o][t]))
                     model.qc_curt_up[c, s_o].setub(EQUALITY_TOLERANCE)
                 else:
-                    model.qc_curt_up[c, s_o].setub(abs(load.qd[s_o][n]))
+                    model.qc_curt_up[c, s_o].setub(abs(load.qd[s_o][t]))
                     model.qc_curt_down[c, s_o].setub(EQUALITY_TOLERANCE)
 
     # - Transformers
@@ -453,8 +459,8 @@ def _build_model(network, n=0):
                     vg = network.generators[gen_idx].vg
                     e = model.e[i, s_o]
                     f = model.f[i, s_o]
-                    model.voltage_cons.add(e ** 2 + f ** 2 <= vg[n] ** 2 + EQUALITY_TOLERANCE)
-                    model.voltage_cons.add(e ** 2 + f ** 2 >= vg[n] ** 2 - EQUALITY_TOLERANCE)
+                    model.voltage_cons.add(e ** 2 + f ** 2 <= vg[t] ** 2 + EQUALITY_TOLERANCE)
+                    model.voltage_cons.add(e ** 2 + f ** 2 >= vg[t] ** 2 - EQUALITY_TOLERANCE)
                 else:
                     # - Voltage at the bus is not controlled
                     e = model.e[i, s_o]
@@ -475,8 +481,8 @@ def _build_model(network, n=0):
             for s_o in model.scenarios_operation:
                 if generator.is_curtaillable():
                     init_sg = 0.0
-                    if generator.status[n]:
-                        init_sg = sqrt(generator.pg[s_o][n] ** 2 + generator.qg[s_o][n] ** 2)
+                    if generator.status[t]:
+                        init_sg = sqrt(generator.pg[s_o][t] ** 2 + generator.qg[s_o][t] ** 2)
                     model.generation_apparent_power.add(model.sg_sqr[g, s_o] <= model.pg[g, s_o] ** 2 + model.qg[g, s_o] ** 2 + EQUALITY_TOLERANCE)
                     model.generation_apparent_power.add(model.sg_sqr[g, s_o] >= model.pg[g, s_o] ** 2 + model.qg[g, s_o] ** 2 - EQUALITY_TOLERANCE)
                     model.generation_apparent_power.add(model.sg_abs[g, s_o] ** 2 <= model.sg_sqr[g, s_o] + EQUALITY_TOLERANCE)
@@ -491,7 +497,7 @@ def _build_model(network, n=0):
                         model.generation_power_factor.add(model.qg[g, s_o] >= tan(min_phi) * model.pg[g, s_o])
                     else:
                         # No power factor control, maintain given phi
-                        phi = atan2(generator.qg[s_o][n], generator.pg[s_o][n])
+                        phi = atan2(generator.qg[s_o][t], generator.pg[s_o][t])
                         model.generation_power_factor.add(model.qg[g, s_o] <= tan(phi) * model.pg[g, s_o])
                         model.generation_power_factor.add(model.qg[g, s_o] >= tan(phi) * model.pg[g, s_o])
 
@@ -814,14 +820,14 @@ def _build_model(network, n=0):
                     if (not network.is_transmission) and network.generators[g].gen_type == GEN_REFERENCE:
                         continue
                     pg = model.pg[g, s_o]
-                    obj_scenario += c_p[n] * network.baseMVA * pg
+                    obj_scenario += c_p[t] * network.baseMVA * pg
 
             # Demand side flexibility
             if params.fl_reg:
                 for c in model.loads:
                     flex_p_up = model.flex_p_up[c, s_o]
                     flex_p_down = model.flex_p_down[c, s_o]
-                    obj_scenario += c_flex[n] * network.baseMVA * (flex_p_down + flex_p_up)
+                    obj_scenario += c_flex[t] * network.baseMVA * (flex_p_down + flex_p_up)
 
             # Load curtailment
             if params.l_curt:
@@ -951,9 +957,9 @@ def _build_model(network, n=0):
     return model
 
 
-def _build_pq_map_model(network):
+def _build_pq_map_model(network, t):
 
-    model = network.build_model()
+    model = network.build_model(t=t)
     ref_gen_idx = network.get_reference_gen_idx()
 
     # Add expected interface power flow variables
@@ -973,11 +979,12 @@ def _build_pq_map_model(network):
 
     # New objective function (PQ maps)
     obj = 0.00
-    model.alpha = pe.Var(domain=pe.NonNegativeReals, initialize=0.00, bounds=(0.00, 1.00))
+    model.alpha = pe.Var(domain=pe.Reals, initialize=0.00, bounds=(-1.00, 1.00))
+    model.beta = pe.Var(domain=pe.Reals, initialize=0.00, bounds=(-1.00, 1.00))
     for s_o in model.scenarios_operation:
         omega_oper = network.prob_operation_scenarios[s_o]
         obj += model.alpha * model.pg[ref_gen_idx, s_o] * omega_oper
-        obj += (1 - model.alpha) * model.qg[ref_gen_idx, s_o] * omega_oper
+        obj += model.beta * model.qg[ref_gen_idx, s_o] * omega_oper
 
     # Regularization -- Added to OF to minimize deviations from scenarios to expected values
     s_base = network.baseMVA
@@ -991,6 +998,85 @@ def _build_pq_map_model(network):
     model.objective.expr = obj
 
     return model
+
+
+def _get_pq_map_vertices(network, t, num_steps=2):
+
+    model = _build_pq_map_model(network, t=t)
+    vertices = []
+
+    for n in range(num_steps + 1):
+
+        alpha = n/num_steps
+        beta = 1 - alpha
+        print(f'alpha={alpha:.3f}_beta={beta:.3f}')
+
+        model.alpha.fix(alpha)
+        model.beta.fix(beta)
+        results = network.optimize(model)
+        processed_results = network.process_results(model, results)
+        network.write_optimization_results_to_excel(processed_results, filename=f'{network.name}_alpha={alpha:.3f}_beta={beta:.3f}')
+        pg, qg = network.get_interface_power_flow(model)
+        vertices.append((pg, qg))
+
+
+        model.alpha.fix(-alpha)
+        model.beta.fix(-beta)
+        results = network.optimize(model)
+        processed_results = network.process_results(model, results)
+        network.write_optimization_results_to_excel(processed_results, filename=f'{network.name}_alpha={-alpha:.3f}_beta={-beta:.3f}')
+        pg, qg = network.get_interface_power_flow(model)
+        vertices.append((pg, qg))
+
+    return np.array(vertices)
+
+
+def _get_pq_map_inequalities(vertices):
+
+    inequalities = []
+    centroid = np.mean(vertices, axis=0)
+    n = len(vertices)
+
+    for i in range(n):
+
+        x1, y1 = vertices[i]
+        x2, y2 = vertices[(i + 1) % n]
+
+        # Perpendicular vector (normal)
+        dx = x2 - x1
+        dy = y2 - y1
+        a = -dy
+        b = dx
+        c = a * x1 + b * y1
+
+        # Flip direction if needed
+        if a * centroid[0] + b * centroid[1] > c:
+            a, b, c = -a, -b, -c
+
+        inequalities.append((a, b, c))
+
+    return inequalities
+
+
+def _plot_pq_map(network, instant, num_steps, vertices, hull, hull_vertices):
+    plt.figure(figsize=(8, 6))
+    plt.plot(*vertices.T, 'g.')
+    for simplex in hull.simplices:
+        plt.plot(vertices[simplex, 0], vertices[simplex, 1], 'green')
+    plt.fill(*hull_vertices.T, alpha=0.2, color='lightgreen')
+    plt.grid(True)
+    plt.axis("equal")
+    plt.title(f"PQ Map")
+    plt.xlabel("P, [MW]")
+    plt.ylabel("Q, [MVAr]")
+    filename = os.path.join(network.diagrams_dir, f'{network.name}_t={instant}_n={num_steps}.pdf')
+    plt.savefig(filename, bbox_inches='tight')
+
+
+def _get_interface_power_flow(network, model):
+    pg = pe.value(model.expected_interface_pf_p) * network.baseMVA
+    qg = pe.value(model.expected_interface_pf_q) * network.baseMVA
+    return pg, qg
 
 
 def _optimize(network, model, from_warm_start=False):
@@ -1715,7 +1801,7 @@ def _process_results(network, model, results=dict(), n=0):
     return processed_results
 
 
-def _compute_objective_function_value(network, model, params, n=0):
+def _compute_objective_function_value(network, model, params, t=0):
 
     obj = 0.0
 
@@ -1736,14 +1822,14 @@ def _compute_objective_function_value(network, model, params, n=0):
                     if (not network.is_transmission) and network.generators[g].gen_type == GEN_REFERENCE:
                         continue
                     pg = pe.value(model.pg[g, s_o])
-                    obj_scenario += c_p[n] * network.baseMVA * pg
+                    obj_scenario += c_p[t] * network.baseMVA * pg
 
             # Demand side flexibility
             if params.fl_reg:
                 for c in model.loads:
                     flex_up = pe.value(model.flex_p_up[c, s_o])
                     flex_down = pe.value(model.flex_p_down[c, s_o])
-                    obj_scenario += c_flex[n] * network.baseMVA * (flex_down + flex_up)
+                    obj_scenario += c_flex[t] * network.baseMVA * (flex_down + flex_up)
 
             # Load curtailment
             if params.l_curt:

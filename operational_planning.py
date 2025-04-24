@@ -119,8 +119,8 @@ def _read_case_study(operational_planning):
     _check_interface_nodes_base_voltage_consistency(operational_planning)
 
     # Add Shared Energy Storages to Transmission and Distribution Networks
-    _add_shared_energy_storage_to_transmission_network(operational_planning)
-    _add_shared_energy_storage_to_distribution_network(operational_planning)
+    #_add_shared_energy_storage_to_transmission_network(operational_planning)
+    #_add_shared_energy_storage_to_distribution_network(operational_planning)
 
 
 
