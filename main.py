@@ -1,6 +1,9 @@
 import os
 import sys
 import getopt
+
+from pyomo.scripting.util import process_results
+
 from operational_planning import OperationalPlanning
 
 
@@ -60,7 +63,13 @@ if __name__ == '__main__':
     operational_planning = OperationalPlanning(directory, filename)
     operational_planning.read_case_study()
 
-    operational_planning.run_hierarchical_coordination(t=11, num_steps=4, print_pq_map=True)
+    transmission_network = operational_planning.transmission_network
+    tn_model = transmission_network.build_model(t=11)
+    results = transmission_network.optimize(tn_model)
+    processed_results = transmission_network.process_results(tn_model, results)
+    transmission_network.write_optimization_results_to_excel(processed_results, filename='test')
+
+    # operational_planning.run_hierarchical_coordination(t=11, num_steps=4, print_pq_map=True)
 
 
 

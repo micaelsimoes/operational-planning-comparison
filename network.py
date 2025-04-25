@@ -1634,10 +1634,8 @@ def _process_results(network, model, results=dict(), n=0):
             processed_results['scenarios'][s_o]['branches']['ratio'] = dict()
 
         if params.fl_reg:
-            processed_results['scenarios'][s_o]['consumption']['p_up'] = dict()
-            processed_results['scenarios'][s_o]['consumption']['p_down'] = dict()
-            processed_results['scenarios'][s_o]['consumption']['q_up'] = dict()
-            processed_results['scenarios'][s_o]['consumption']['q_down'] = dict()
+            processed_results['scenarios'][s_o]['consumption']['pc_flex'] = dict()
+            processed_results['scenarios'][s_o]['consumption']['qc_flex'] = dict()
 
         if params.l_curt:
             processed_results['scenarios'][s_o]['consumption']['pc_curt'] = dict()
@@ -1700,16 +1698,12 @@ def _process_results(network, model, results=dict(), n=0):
             processed_results['scenarios'][s_o]['consumption']['pc_net'][load_id] += pc
             processed_results['scenarios'][s_o]['consumption']['qc_net'][load_id] += qc
             if params.fl_reg:
-                pup = pe.value(model.flex_p_up[c, s_o]) * network.baseMVA
-                pdown = pe.value(model.flex_p_down[c, s_o]) * network.baseMVA
-                qup = pe.value(model.flex_q_up[c, s_o]) * network.baseMVA
-                qdown = pe.value(model.flex_q_down[c, s_o]) * network.baseMVA
-                processed_results['scenarios'][s_o]['consumption']['p_up'][load_id] = pup
-                processed_results['scenarios'][s_o]['consumption']['p_down'][load_id] = pdown
-                processed_results['scenarios'][s_o]['consumption']['pc_net'][load_id] += pup - pdown
-                processed_results['scenarios'][s_o]['consumption']['q_up'][load_id] = qup
-                processed_results['scenarios'][s_o]['consumption']['q_down'][load_id] = qdown
-                processed_results['scenarios'][s_o]['consumption']['qc_net'][load_id] += qup - qdown
+                pc_flex = pe.value(model.flex_p_up[c, s_o] - model.flex_p_down[c, s_o]) * network.baseMVA
+                qc_flex = pe.value(model.flex_q_up[c, s_o] - model.flex_q_down[c, s_o]) * network.baseMVA
+                processed_results['scenarios'][s_o]['consumption']['pc_flex'][load_id] = pc_flex
+                processed_results['scenarios'][s_o]['consumption']['pc_net'][load_id] += pc_flex
+                processed_results['scenarios'][s_o]['consumption']['pc_flex'][load_id] = qc_flex
+                processed_results['scenarios'][s_o]['consumption']['qc_net'][load_id] += qc_flex
             if params.l_curt:
                 pc_curt = pe.value(model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o]) * network.baseMVA
                 qc_curt = pe.value(model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o]) * network.baseMVA
@@ -1802,14 +1796,10 @@ def _process_results(network, model, results=dict(), n=0):
         if params.fl_reg:
             for i in model.loads:
                 load_id = network.loads[i].load_id
-                p_up = pe.value(model.flex_p_up[i, s_o]) * network.baseMVA
-                p_down = pe.value(model.flex_p_down[i, s_o]) * network.baseMVA
-                q_up = pe.value(model.flex_q_up[i, s_o]) * network.baseMVA
-                q_down = pe.value(model.flex_q_down[i, s_o]) * network.baseMVA
-                processed_results['scenarios'][s_o]['consumption']['p_up'][load_id] = p_up
-                processed_results['scenarios'][s_o]['consumption']['p_down'][load_id] = p_down
-                processed_results['scenarios'][s_o]['consumption']['q_up'][load_id] = q_up
-                processed_results['scenarios'][s_o]['consumption']['q_down'][load_id] = q_down
+                pc_flex = pe.value(model.flex_p_up[i, s_o] - model.flex_p_down[i, s_o]) * network.baseMVA
+                qc_flex = pe.value(model.flex_q_up[i, s_o] - model.flex_q_down[i, s_o]) * network.baseMVA
+                processed_results['scenarios'][s_o]['consumption']['pc_flex'][load_id] = pc_flex
+                processed_results['scenarios'][s_o]['consumption']['qc_flex'][load_id] = qc_flex
 
         # Shared Energy Storages
         for e in model.shared_energy_storages:
@@ -1897,12 +1887,9 @@ def _compute_objective_function_value(network, model, params, t=0):
             # Demand side flexibility
             if params.fl_reg:
                 for c in model.loads:
-                    flex_p_up = pe.value(model.flex_p_up[c, s_o])
-                    flex_p_down = pe.value(model.flex_p_down[c, s_o])
-                    flex_q_up = pe.value(model.flex_q_up[c, s_o])
-                    flex_q_down = pe.value(model.flex_q_down[c, s_o])
-                    obj_scenario += c_flex[t] * network.baseMVA * (flex_p_down + flex_p_up)
-                    obj_scenario += c_flex[t] * network.baseMVA * (flex_q_down + flex_q_up)
+                    flex_p = pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
+                    flex_q = pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
+                    obj_scenario += c_flex[t] * network.baseMVA * (flex_p + flex_q)
 
             # Load curtailment
             if params.l_curt:
@@ -1945,12 +1932,9 @@ def _compute_objective_function_value(network, model, params, t=0):
             # Demand side flexibility
             if params.fl_reg:
                 for c in model.loads:
-                    flex_p_up = pe.value(model.flex_p_up[c, s_o])
-                    flex_p_down = pe.value(model.flex_p_down[c, s_o])
-                    flex_q_up = pe.value(model.flex_q_up[c, s_o])
-                    flex_q_down = pe.value(model.flex_q_down[c, s_o])
-                    obj_scenario += pen_flex_usage * network.baseMVA * (flex_p_down + flex_p_up)
-                    obj_scenario += pen_flex_usage * network.baseMVA * (flex_q_down + flex_q_up)
+                    pc_flex = pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
+                    qc_flex = pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
+                    obj_scenario += pen_flex_usage * network.baseMVA * (pc_flex + qc_flex)
 
             obj += obj_scenario * network.prob_operation_scenarios[s_o]
 
@@ -2090,16 +2074,17 @@ def _compute_load_curtailment(network, model, params):
 
 def _compute_flexibility_used(network, model, params):
 
-    flexibility_used = 0.0
+    flexibility_used = {'p': 0.0, 'q': 0.0}
 
     if params.fl_reg:
         for s_o in model.scenarios_operation:
-            flexibility_used_scenario = 0.0
+            flexibility_used_scenario = {'p': 0.0, 'q': 0.0}
             for c in model.loads:
-                flexibility_used_scenario += pe.value(model.flex_p_up[c, s_o]) * network.baseMVA
-                flexibility_used_scenario += pe.value(model.flex_p_down[c, s_o]) * network.baseMVA
+                flexibility_used_scenario['p'] += pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o]) * network.baseMVA
+                flexibility_used_scenario['q'] += pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o]) * network.baseMVA
 
-            flexibility_used += flexibility_used_scenario * network.prob_operation_scenarios[s_o]
+            flexibility_used['p'] += flexibility_used_scenario['p'] * network.prob_operation_scenarios[s_o]
+            flexibility_used['q'] += flexibility_used_scenario['q'] * network.prob_operation_scenarios[s_o]
 
     return flexibility_used
 
@@ -2167,9 +2152,15 @@ def _write_main_info_to_excel(network, workbook, results):
 
     # Flexibility used
     if network.params.fl_reg:
+
         line_idx += 1
         sheet.cell(row=line_idx, column=1).value = 'Flexibility used, [MWh]'
-        sheet.cell(row=line_idx, column=2).value = results['flex_used']
+        sheet.cell(row=line_idx, column=2).value = results['flex_used']['p']
+        sheet.cell(row=line_idx, column=2).number_format = decimal_style
+
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = 'Flexibility used, [MVArh]'
+        sheet.cell(row=line_idx, column=2).value = results['flex_used']['q']
         sheet.cell(row=line_idx, column=2).number_format = decimal_style
 
     # Total Load curtailed
@@ -2475,20 +2466,20 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
     row_idx = row_idx + 1
 
     expected_pc = dict()
-    expected_flex_up = dict()
-    expected_flex_down = dict()
+    expected_pc_flex = dict()
     expected_pc_curt = dict()
     expected_pnet = dict()
     expected_qc = dict()
+    expected_qc_flex = dict()
     expected_qc_curt = dict()
     expected_qnet = dict()
     for load in network.loads:
         expected_pc[load.load_id] = 0.00
-        expected_flex_up[load.load_id] = 0.00
-        expected_flex_down[load.load_id] = 0.00
+        expected_pc_flex[load.load_id] = 0.00
         expected_pc_curt[load.load_id] = 0.00
         expected_pnet[load.load_id] = 0.00
         expected_qc[load.load_id] = 0.00
+        expected_qc_flex[load.load_id] = 0.00
         expected_qc_curt[load.load_id] = 0.00
         expected_qnet[load.load_id] = 0.00
 
@@ -2516,27 +2507,16 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
 
             if network.params.fl_reg:
 
-                flex_up = results['scenarios'][s_o]['consumption']['p_up'][load_id]
-                flex_down = results['scenarios'][s_o]['consumption']['p_down'][load_id]
+                flex_p = results['scenarios'][s_o]['consumption']['pc_flex'][load_id]
 
-                # - Flexibility, up
+                # - Flexibility, P
                 sheet.cell(row=row_idx, column=1).value = load_id
                 sheet.cell(row=row_idx, column=2).value = node_id
-                sheet.cell(row=row_idx, column=3).value = 'Flex Up, [MW]'
+                sheet.cell(row=row_idx, column=3).value = 'Pflex, [MW]'
                 sheet.cell(row=row_idx, column=4).value = s_o
-                sheet.cell(row=row_idx, column=5).value = flex_up
+                sheet.cell(row=row_idx, column=5).value = flex_p
                 sheet.cell(row=row_idx, column=5).number_format = decimal_style
-                expected_flex_up[load_id] += flex_up * omega_s
-                row_idx = row_idx + 1
-
-                # - Flexibility, down
-                sheet.cell(row=row_idx, column=1).value = load_id
-                sheet.cell(row=row_idx, column=2).value = node_id
-                sheet.cell(row=row_idx, column=3).value = 'Flex Down, [MW]'
-                sheet.cell(row=row_idx, column=4).value = s_o
-                sheet.cell(row=row_idx, column=5).value = flex_down
-                sheet.cell(row=row_idx, column=5).number_format = decimal_style
-                expected_flex_down[load_id] += flex_down * omega_s
+                expected_pc_flex[load_id] += flex_p * omega_s
                 row_idx = row_idx + 1
 
             if network.params.l_curt:
@@ -2579,6 +2559,20 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
             expected_qc[load_id] += qc * omega_s
             row_idx = row_idx + 1
 
+            if network.params.fl_reg:
+
+                flex_q = results['scenarios'][s_o]['consumption']['qc_flex'][load_id]
+
+                # - Flexibility, Q
+                sheet.cell(row=row_idx, column=1).value = load_id
+                sheet.cell(row=row_idx, column=2).value = node_id
+                sheet.cell(row=row_idx, column=3).value = 'Qflex, [MVAr]'
+                sheet.cell(row=row_idx, column=4).value = s_o
+                sheet.cell(row=row_idx, column=5).value = flex_q
+                sheet.cell(row=row_idx, column=5).number_format = decimal_style
+                expected_qc_flex[load_id] += flex_q * omega_s
+                row_idx = row_idx + 1
+
             if network.params.l_curt:
 
                 qc_curt = results['scenarios'][s_o]['consumption']['qc_curt'][load_id]
@@ -2596,10 +2590,14 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
                 expected_qc_curt[load_id] += qc_curt * omega_s
                 row_idx = row_idx + 1
 
+            if network.params.fl_reg or network.params.l_curt:
+
+                q_net = results['scenarios'][s_o]['consumption']['qc_net'][load_id]
+
                 # - Reactive power net consumption
                 sheet.cell(row=row_idx, column=1).value = load_id
                 sheet.cell(row=row_idx, column=2).value = node_id
-                sheet.cell(row=row_idx, column=3).value = 'Qc_net, [MW]'
+                sheet.cell(row=row_idx, column=3).value = 'Qc_net, [MVAr]'
                 sheet.cell(row=row_idx, column=4).value = s_o
                 sheet.cell(row=row_idx, column=5).value = q_net
                 sheet.cell(row=row_idx, column=5).number_format = decimal_style
@@ -2622,21 +2620,12 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
 
         if network.params.fl_reg:
 
-            # - Flexibility, up
+            # - Flexibility, P
             sheet.cell(row=row_idx, column=1).value = load_id
             sheet.cell(row=row_idx, column=2).value = node_id
-            sheet.cell(row=row_idx, column=3).value = 'Flex Up, [MW]'
+            sheet.cell(row=row_idx, column=3).value = 'Pflex, [MW]'
             sheet.cell(row=row_idx, column=4).value = 'Expected'
-            sheet.cell(row=row_idx, column=5).value = expected_flex_up[load_id]
-            sheet.cell(row=row_idx, column=5).number_format = decimal_style
-            row_idx = row_idx + 1
-
-            # - Flexibility, down
-            sheet.cell(row=row_idx, column=1).value = load_id
-            sheet.cell(row=row_idx, column=2).value = node_id
-            sheet.cell(row=row_idx, column=3).value = 'Flex Down, [MW]'
-            sheet.cell(row=row_idx, column=4).value = 'Expected'
-            sheet.cell(row=row_idx, column=5).value = expected_flex_down[load_id]
+            sheet.cell(row=row_idx, column=5).value = expected_pc_flex[load_id]
             sheet.cell(row=row_idx, column=5).number_format = decimal_style
             row_idx = row_idx + 1
 
@@ -2674,6 +2663,17 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
             sheet.cell(row=row_idx, column=5).number_format = decimal_style
         row_idx = row_idx + 1
 
+        if network.params.fl_reg:
+
+            # - Flexibility, P
+            sheet.cell(row=row_idx, column=1).value = load_id
+            sheet.cell(row=row_idx, column=2).value = node_id
+            sheet.cell(row=row_idx, column=3).value = 'Qflex, [MVAr]'
+            sheet.cell(row=row_idx, column=4).value = 'Expected'
+            sheet.cell(row=row_idx, column=5).value = expected_qc_flex[load_id]
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            row_idx = row_idx + 1
+
         if network.params.l_curt:
 
             # - Load curtailment (reactive power)
@@ -2686,6 +2686,8 @@ def _write_network_consumption_results_to_excel(network, workbook, results, n=0)
             if not isclose(expected_qc_curt[load_id], 0.00, abs_tol=VIOLATION_TOLERANCE):
                 sheet.cell(row=row_idx, column=5).fill = violation_fill
             row_idx = row_idx + 1
+
+        if network.params.fl_reg or network.params.l_curt:
 
             # - Reactive power net consumption
             sheet.cell(row=row_idx, column=1).value = load_id
