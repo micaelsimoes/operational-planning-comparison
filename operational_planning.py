@@ -227,7 +227,7 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
     for dn in tn_model.active_distribution_networks:
         adn_node_id = transmission_network.active_distribution_network_nodes[dn]
         adn_pq_map = dn_models[adn_node_id]
-        initial_solution = adn_pq_map['initial_solution']
+        # initial_solution = adn_pq_map['initial_solution']
         for ineq in adn_pq_map['inequalities']:
             a = ineq['Pg']
             b = ineq['Qg']
