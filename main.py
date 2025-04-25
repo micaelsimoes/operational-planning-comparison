@@ -64,8 +64,7 @@ if __name__ == '__main__':
     for node_id in operational_planning.distribution_networks:
         distribution_network = operational_planning.distribution_networks[node_id]
         # distribution_network.run_opf()
-        distribution_network.determine_pq_map(t=11, num_steps=1)
-        distribution_network.determine_pq_map_v2(t=11)
+        distribution_network.determine_pq_map(t=11, num_steps=2)
 
     # operational_planning.run_hierarchical_coordination()
 

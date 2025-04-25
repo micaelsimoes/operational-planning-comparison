@@ -48,13 +48,10 @@ class Network:
         hull = ConvexHull(vertices)
         hull_vertices = vertices[hull.vertices]
         inequalities = _get_pq_map_inequalities(hull_vertices)
-        print("\nPQ Map Inequalities (ax + by <= c):")
+        print("\nPQ Map Inequalities (a Pg + b Qg <= c):")
         for n, (pg, qg, const) in enumerate(inequalities):
             print(f"Edge {n + 1}: {pg:.3f}*Pg + {qg:.3f}*Qg <= {const:.3f}")
         _plot_pq_map(self, t, num_steps, vertices, hull, hull_vertices)
-
-    def determine_pq_map_v2(self, t=0):
-        print(self.name)
 
     def get_interface_power_flow(self, model):
         return _get_interface_power_flow(self, model)
@@ -978,16 +975,16 @@ def _build_pq_map_model(network, t):
     model.interface_expected_values.add(model.expected_interface_pf_q >= expected_pf_q - EQUALITY_TOLERANCE)
 
     # New objective function (PQ maps)
-    obj = 0.00
+    s_base = network.baseMVA
+    obj = model.objective.expr
     model.alpha = pe.Var(domain=pe.Reals, initialize=0.00, bounds=(-1.00, 1.00))
     model.beta = pe.Var(domain=pe.Reals, initialize=0.00, bounds=(-1.00, 1.00))
     for s_o in model.scenarios_operation:
         omega_oper = network.prob_operation_scenarios[s_o]
-        obj += model.alpha * model.pg[ref_gen_idx, s_o] * omega_oper
-        obj += model.beta * model.qg[ref_gen_idx, s_o] * omega_oper
+        obj += model.alpha * s_base * model.pg[ref_gen_idx, s_o] * omega_oper
+        obj += model.beta * network.baseMVA * model.qg[ref_gen_idx, s_o] * omega_oper
 
     # Regularization -- Added to OF to minimize deviations from scenarios to expected values
-    s_base = network.baseMVA
     ref_gen_idx = network.get_reference_gen_idx()
     model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
     model.penalty_regularization.fix(PENALTY_REGULARIZATION)
@@ -2366,7 +2363,7 @@ def _write_network_voltage_results_to_excel(network, workbook, results, n=0):
         # Expected voltage magnitude
         sheet.cell(row=row_idx, column=1).value = node_id
         sheet.cell(row=row_idx, column=2).value = 'Vmag, [p.u.]'
-        sheet.cell(row=row_idx, column=3).value = '-'
+        sheet.cell(row=row_idx, column=3).value = 'Expected'
         sheet.cell(row=row_idx, column=4).value = expected_vmag[node_id]
         sheet.cell(row=row_idx, column=4).number_format = decimal_style
         if expected_vmag[node_id] > v_max + VIOLATION_TOLERANCE or expected_vmag[node_id] < v_min - VIOLATION_TOLERANCE:
