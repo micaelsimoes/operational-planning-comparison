@@ -178,6 +178,21 @@ class Network:
         print(f'[ERROR] Network {self.name}. Node {node_id} does not have a shared energy storage system! Check network.')
         exit(ERROR_NETWORK_FILE)
 
+    def get_interface_branch_rating(self):
+        if not self.is_transmission:
+            ref_node_id = self.get_reference_node_id()
+            interface_branch_rating = 0.00
+            for branch in self.branches:
+                if branch.fbus == ref_node_id or branch.tbus == ref_node_id:
+                    interface_branch_rating += branch.rate
+            return interface_branch_rating
+        else:
+            print(f'[ERROR] Network {self.name}. Function get_interface_branch_rating() NOT APPLICABLE to TRANSMISSION NETWORK.')
+            exit(ERROR_NETWORK_FILE)
+
+    def get_primal_value(self, model):
+        return pe.value(model.objective)
+
     def process_results(self, model, results=dict()):
         return _process_results(self, model, results=results)
 

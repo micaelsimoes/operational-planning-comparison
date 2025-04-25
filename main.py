@@ -1,9 +1,6 @@
 import os
 import sys
 import getopt
-
-from pyomo.scripting.util import process_results
-
 from operational_planning import OperationalPlanning
 
 
