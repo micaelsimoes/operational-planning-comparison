@@ -1067,7 +1067,7 @@ def _get_pq_map_vertices(network, t, num_steps):
     model = _build_pq_map_model(network, t=t)
     vertices = []
 
-    for n in range(num_steps):
+    for n in range(num_steps + 1):
 
         alpha = n/num_steps
         beta = 1 - alpha
@@ -1075,17 +1075,13 @@ def _get_pq_map_vertices(network, t, num_steps):
 
         model.alpha.fix(alpha)
         model.beta.fix(beta)
-        results = network.optimize(model)
-        processed_results = network.process_results(model, results)
-        network.write_optimization_results_to_excel(processed_results, filename=f'{network.name}_alpha={alpha:.3f}_beta={beta:.3f}')
+        network.optimize(model)
         pg, qg = network.get_interface_power_flow(model)
         vertices.append((pg, qg))
 
         model.alpha.fix(-alpha)
         model.beta.fix(-beta)
-        results = network.optimize(model)
-        processed_results = network.process_results(model, results)
-        network.write_optimization_results_to_excel(processed_results, filename=f'{network.name}_alpha={-alpha:.3f}_beta={-beta:.3f}')
+        network.optimize(model)
         pg, qg = network.get_interface_power_flow(model)
         vertices.append((pg, qg))
 

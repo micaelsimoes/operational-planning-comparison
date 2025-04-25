@@ -60,12 +60,8 @@ if __name__ == '__main__':
     operational_planning = OperationalPlanning(directory, filename)
     operational_planning.read_case_study()
 
-    # operational_planning.transmission_network.run_opf()
-    for node_id in operational_planning.distribution_networks:
-        distribution_network = operational_planning.distribution_networks[node_id]
-        # distribution_network.run_opf()
-        distribution_network.determine_pq_map(t=11, num_steps=2)
+    operational_planning.run_hierarchical_coordination(t=11, num_steps=4, print_pq_map=True)
 
-    # operational_planning.run_hierarchical_coordination()
+
 
 

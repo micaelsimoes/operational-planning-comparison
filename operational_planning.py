@@ -1,4 +1,6 @@
 import os
+from idlelib.pyparse import trans
+
 import pandas as pd
 from math import isclose
 from copy import copy
@@ -225,11 +227,16 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
     for dn in tn_model.active_distribution_networks:
         adn_node_id = transmission_network.active_distribution_network_nodes[dn]
         adn_pq_map = dn_models[adn_node_id]
+        initial_solution = adn_pq_map['initial_solution']
         for ineq in adn_pq_map['inequalities']:
             a = ineq['Pg']
             b = ineq['Qg']
-            c = ineq['c']
+            c = ineq['c'] / transmission_network.baseMVA
             tn_model.pq_maps.add(a * tn_model.expected_interface_pf_p[dn] + b * tn_model.expected_interface_pf_q[dn] <= c)
+            # tn_model.pq_maps.add(tn_model.expected_interface_pf_p[dn] <= initial_solution['Pg'] / transmission_network.baseMVA * 1.10)
+            # tn_model.pq_maps.add(tn_model.expected_interface_pf_p[dn] >= initial_solution['Pg'] / transmission_network.baseMVA * 0.90)
+            # tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] <= initial_solution['Qg'] / transmission_network.baseMVA * 1.10)
+            # tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] >= initial_solution['Qg'] / transmission_network.baseMVA * 0.90)
 
     # Regularization -- Added to OF to minimize deviations from scenarios to expected values
     obj = copy(tn_model.objective.expr)
