@@ -163,6 +163,13 @@ class Network:
                     description = 'RES (Generic, Non-controllable)'
         return description
 
+    def get_adn_load_idx(self, node_id):
+        for c in range(len(self.loads)):
+            if self.loads[c].bus == node_id:
+                return c
+        print(f'[ERROR] Network {self.name}. Node ID {node_id} does not have an ADN! Check network model.')
+        exit(ERROR_NETWORK_FILE)
+
     def process_results(self, model, results=dict()):
         return _process_results(self, model, results=results)
 
@@ -315,6 +322,8 @@ def _build_model(network, t):
     if params.fl_reg:
         model.flex_p_up = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
         model.flex_p_down = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
+        model.flex_q_up = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
+        model.flex_q_down = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
         for c in model.loads:
             load = network.loads[c]
             for s_o in model.scenarios_operation:
@@ -326,6 +335,8 @@ def _build_model(network, t):
                 else:
                     model.flex_p_up[c, s_o].setub(EQUALITY_TOLERANCE)
                     model.flex_p_down[c, s_o].setub(EQUALITY_TOLERANCE)
+                model.flex_q_up[c, s_o].setub(EQUALITY_TOLERANCE)         # Note: used for coordinated operation
+                model.flex_q_down[c, s_o].setub(EQUALITY_TOLERANCE)
     if params.l_curt:
         model.pc_curt_down = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
         model.pc_curt_up = pe.Var(model.loads, model.scenarios_operation, domain=pe.NonNegativeReals, initialize=0.0)
@@ -612,6 +623,7 @@ def _build_model(network, t):
                     Qd += model.qc[c, s_o]
                     if params.fl_reg and network.loads[c].fl_reg:
                         Pd += (model.flex_p_up[c, s_o] - model.flex_p_down[c, s_o])
+                        Qd += (model.flex_q_up[c, s_o] - model.flex_q_down[c, s_o])
                     if params.l_curt:
                         Pd -= (model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o])
                         Qd -= (model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o])
@@ -817,7 +829,10 @@ def _build_model(network, t):
                 for c in model.loads:
                     flex_p_up = model.flex_p_up[c, s_o]
                     flex_p_down = model.flex_p_down[c, s_o]
+                    flex_q_up = model.flex_q_up[c, s_o]
+                    flex_q_down = model.flex_q_down[c, s_o]
                     obj_scenario += c_flex[t] * network.baseMVA * (flex_p_down + flex_p_up)
+                    obj_scenario += c_flex[t] * network.baseMVA * (flex_q_down + flex_q_up)
 
             # Load curtailment
             if params.l_curt:
@@ -868,7 +883,10 @@ def _build_model(network, t):
                 for c in model.loads:
                     flex_p_up = model.flex_p_up[c, s_o]
                     flex_p_down = model.flex_p_down[c, s_o]
+                    flex_q_up = model.flex_q_up[c, s_o]
+                    flex_q_down = model.flex_q_down[c, s_o]
                     obj_scenario += model.penalty_flex_usage * network.baseMVA * (flex_p_down + flex_p_up)
+                    obj_scenario += model.penalty_flex_usage * network.baseMVA * (flex_q_down + flex_q_up)
 
             # ESS utilization
             if params.es_reg:
@@ -947,18 +965,21 @@ def _build_model(network, t):
     return model
 
 
-
+# ======================================================================================================================
+#   PQ MAPS optimization functions
+# ======================================================================================================================
 def _determine_pq_map(network, t, num_steps, print_pq_map):
+    initial_solution = _get_initial_solution(network, t=t)
     vertices = _get_pq_map_vertices(network, t=t, num_steps=num_steps)
     hull = ConvexHull(vertices)
     hull_vertices = vertices[hull.vertices]
     inequalities = _get_pq_map_inequalities(hull_vertices)
     if print_pq_map:
-        print("\nPQ Map Inequalities (a Pg + b Qg <= c):")
-        for n, (pg, qg, const) in enumerate(inequalities):
-            print(f"Edge {n + 1}: {pg:.3f}*Pg + {qg:.3f}*Qg <= {const:.3f}")
-        _plot_pq_map(network, t, num_steps, vertices, hull, hull_vertices)
-    return inequalities
+        print("\nPQ Map Inequalities (a*Pg + b*Qg <= c):")
+        for ineq in inequalities:
+            print(f"{ineq['Pg']:.3f}*Pg + {ineq['Qg']:.3f}*Qg <= {ineq['c']:.3f}")
+        _plot_pq_map(network, t, num_steps, vertices, hull, hull_vertices, initial_solution=initial_solution)
+    return initial_solution, inequalities
 
 
 def _build_pq_map_model(network, t):
@@ -1004,12 +1025,49 @@ def _build_pq_map_model(network, t):
     return model
 
 
-def _get_pq_map_vertices(network, t, num_steps=2):
+def _get_initial_solution(network, t):
+
+    model = network.build_model(t=t)
+    ref_gen_idx = network.get_reference_gen_idx()
+
+    # Add expected interface power flow variables
+    expected_pf_p = 0.00
+    expected_pf_q = 0.00
+    model.expected_interface_pf_p = pe.Var(domain=pe.Reals, initialize=0.00)
+    model.expected_interface_pf_q = pe.Var(domain=pe.Reals, initialize=0.00)
+    model.interface_expected_values = pe.ConstraintList()
+    for s_o in model.scenarios_operation:
+        omega_oper = network.prob_operation_scenarios[s_o]
+        expected_pf_p += omega_oper * model.pg[ref_gen_idx, s_o]
+        expected_pf_q += omega_oper * model.qg[ref_gen_idx, s_o]
+    model.interface_expected_values.add(model.expected_interface_pf_p <= expected_pf_p + EQUALITY_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_pf_p >= expected_pf_p - EQUALITY_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_pf_q <= expected_pf_q + EQUALITY_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_pf_q >= expected_pf_q - EQUALITY_TOLERANCE)
+
+    # # Regularization -- Added to OF to minimize deviations from scenarios to expected values
+    # s_base = network.baseMVA
+    # obj = model.objective.expr
+    # model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
+    # model.penalty_regularization.fix(PENALTY_REGULARIZATION)
+    # for s_o in model.scenarios_operation:
+    #     obj += model.penalty_regularization * s_base * (model.pg[ref_gen_idx, s_o] - model.expected_interface_pf_p) ** 2
+    #     obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.expected_interface_pf_q) ** 2
+    # model.objective.expr = obj
+
+    results = network.optimize(model)
+    pg, qg = network.get_interface_power_flow(model)
+    solution = {'Pg': pg, 'Qg': qg}
+
+    return solution
+
+
+def _get_pq_map_vertices(network, t, num_steps):
 
     model = _build_pq_map_model(network, t=t)
     vertices = []
 
-    for n in range(num_steps + 1):
+    for n in range(num_steps):
 
         alpha = n/num_steps
         beta = 1 - alpha
@@ -1022,7 +1080,6 @@ def _get_pq_map_vertices(network, t, num_steps=2):
         network.write_optimization_results_to_excel(processed_results, filename=f'{network.name}_alpha={alpha:.3f}_beta={beta:.3f}')
         pg, qg = network.get_interface_power_flow(model)
         vertices.append((pg, qg))
-
 
         model.alpha.fix(-alpha)
         model.beta.fix(-beta)
@@ -1057,14 +1114,16 @@ def _get_pq_map_inequalities(vertices):
         if a * centroid[0] + b * centroid[1] > c:
             a, b, c = -a, -b, -c
 
-        inequalities.append((a, b, c))
+        inequalities.append({'Pg': a, 'Qg': b, 'c': c})
 
     return inequalities
 
 
-def _plot_pq_map(network, instant, num_steps, vertices, hull, hull_vertices):
+def _plot_pq_map(network, instant, num_steps, vertices, hull, hull_vertices, initial_solution=None):
     plt.figure(figsize=(8, 6))
     plt.plot(*vertices.T, 'g.')
+    if initial_solution:
+        plt.plot(initial_solution['Pg'], initial_solution['Qg'], 'kx')
     for simplex in hull.simplices:
         plt.plot(vertices[simplex, 0], vertices[simplex, 1], 'green')
     plt.fill(*hull_vertices.T, alpha=0.2, color='lightgreen')
@@ -1581,6 +1640,8 @@ def _process_results(network, model, results=dict(), n=0):
         if params.fl_reg:
             processed_results['scenarios'][s_o]['consumption']['p_up'] = dict()
             processed_results['scenarios'][s_o]['consumption']['p_down'] = dict()
+            processed_results['scenarios'][s_o]['consumption']['q_up'] = dict()
+            processed_results['scenarios'][s_o]['consumption']['q_down'] = dict()
 
         if params.l_curt:
             processed_results['scenarios'][s_o]['consumption']['pc_curt'] = dict()
@@ -1645,9 +1706,14 @@ def _process_results(network, model, results=dict(), n=0):
             if params.fl_reg:
                 pup = pe.value(model.flex_p_up[c, s_o]) * network.baseMVA
                 pdown = pe.value(model.flex_p_down[c, s_o]) * network.baseMVA
+                qup = pe.value(model.flex_q_up[c, s_o]) * network.baseMVA
+                qdown = pe.value(model.flex_q_down[c, s_o]) * network.baseMVA
                 processed_results['scenarios'][s_o]['consumption']['p_up'][load_id] = pup
                 processed_results['scenarios'][s_o]['consumption']['p_down'][load_id] = pdown
                 processed_results['scenarios'][s_o]['consumption']['pc_net'][load_id] += pup - pdown
+                processed_results['scenarios'][s_o]['consumption']['q_up'][load_id] = qup
+                processed_results['scenarios'][s_o]['consumption']['q_down'][load_id] = qdown
+                processed_results['scenarios'][s_o]['consumption']['qc_net'][load_id] += qup - qdown
             if params.l_curt:
                 pc_curt = pe.value(model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o]) * network.baseMVA
                 qc_curt = pe.value(model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o]) * network.baseMVA
@@ -1742,8 +1808,12 @@ def _process_results(network, model, results=dict(), n=0):
                 load_id = network.loads[i].load_id
                 p_up = pe.value(model.flex_p_up[i, s_o]) * network.baseMVA
                 p_down = pe.value(model.flex_p_down[i, s_o]) * network.baseMVA
+                q_up = pe.value(model.flex_q_up[i, s_o]) * network.baseMVA
+                q_down = pe.value(model.flex_q_down[i, s_o]) * network.baseMVA
                 processed_results['scenarios'][s_o]['consumption']['p_up'][load_id] = p_up
                 processed_results['scenarios'][s_o]['consumption']['p_down'][load_id] = p_down
+                processed_results['scenarios'][s_o]['consumption']['q_up'][load_id] = q_up
+                processed_results['scenarios'][s_o]['consumption']['q_down'][load_id] = q_down
 
         # Shared Energy Storages
         for e in model.shared_energy_storages:
@@ -1831,9 +1901,12 @@ def _compute_objective_function_value(network, model, params, t=0):
             # Demand side flexibility
             if params.fl_reg:
                 for c in model.loads:
-                    flex_up = pe.value(model.flex_p_up[c, s_o])
-                    flex_down = pe.value(model.flex_p_down[c, s_o])
-                    obj_scenario += c_flex[t] * network.baseMVA * (flex_down + flex_up)
+                    flex_p_up = pe.value(model.flex_p_up[c, s_o])
+                    flex_p_down = pe.value(model.flex_p_down[c, s_o])
+                    flex_q_up = pe.value(model.flex_q_up[c, s_o])
+                    flex_q_down = pe.value(model.flex_q_down[c, s_o])
+                    obj_scenario += c_flex[t] * network.baseMVA * (flex_p_down + flex_p_up)
+                    obj_scenario += c_flex[t] * network.baseMVA * (flex_q_down + flex_q_up)
 
             # Load curtailment
             if params.l_curt:
@@ -1878,7 +1951,10 @@ def _compute_objective_function_value(network, model, params, t=0):
                 for c in model.loads:
                     flex_p_up = pe.value(model.flex_p_up[c, s_o])
                     flex_p_down = pe.value(model.flex_p_down[c, s_o])
+                    flex_q_up = pe.value(model.flex_q_up[c, s_o])
+                    flex_q_down = pe.value(model.flex_q_down[c, s_o])
                     obj_scenario += pen_flex_usage * network.baseMVA * (flex_p_down + flex_p_up)
+                    obj_scenario += pen_flex_usage * network.baseMVA * (flex_q_down + flex_q_up)
 
             obj += obj_scenario * network.prob_operation_scenarios[s_o]
 

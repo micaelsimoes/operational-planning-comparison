@@ -1,6 +1,11 @@
 import os
 import pandas as pd
 from math import isclose
+from copy import copy
+import pyomo.opt as po
+import pyomo.environ as pe
+from pyomo.scripting.util import process_results
+
 from network import Network
 from energy_storage import EnergyStorage
 from shared_energy_storage_data import SharedEnergyStorageData
@@ -27,8 +32,8 @@ class OperationalPlanning:
         self.active_distribution_network_nodes = list()
         self.params = ADMMParameters()
 
-    def run_hierarchical_coordination(self):
-        _run_hierarchical_coordination(self)
+    def run_hierarchical_coordination(self, t=0, num_steps=8, print_pq_map=False):
+        _run_hierarchical_coordination(self, t, num_steps, print_pq_map)
 
     def read_case_study(self):
         _read_case_study(self)
@@ -123,7 +128,6 @@ def _read_case_study(operational_planning):
     #_add_shared_energy_storage_to_distribution_network(operational_planning)
 
 
-
 # ======================================================================================================================
 #  MARKET DATA read functions
 # ======================================================================================================================
@@ -154,20 +158,94 @@ def _get_market_costs_from_excel_file(filename):
 # ======================================================================================================================
 #  OPERATIONAL PLANNING functions
 # ======================================================================================================================
-def _run_hierarchical_coordination(operational_planning):
+def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_map):
 
     print('[INFO] Running HIERARCHICAL OPERATIONAL PLANNING...')
 
     transmission_network = operational_planning.transmission_network
     distribution_networks = operational_planning.distribution_networks
-    admm_parameters = operational_planning.params
     results = {'tso': dict(), 'dso': dict()}
 
-    # Create ADN models
-    dso_models, results['dso'] = create_distribution_networks_models(distribution_networks)
+    # Get DN models representation (PQ maps)
+    dn_models = dict()
+    for node_id in distribution_networks:
+        distribution_network = distribution_networks[node_id]
+        init_solution, ineqs = distribution_network.determine_pq_map(t=t, num_steps=num_steps, print_pq_map=print_pq_map)
+        dn_models[node_id] = {
+            'initial_solution': init_solution,
+            'inequalities': ineqs
+        }
 
+    # TN model
+    tn_model = transmission_network.build_model(t=t)
+    tn_model.active_distribution_networks = range(len(transmission_network.active_distribution_network_nodes))
 
-    print()
+    # TN, Fix Pc, Qc at the interface nodes, free flexibility
+    for dn in tn_model.active_distribution_networks:
+        adn_node_id = transmission_network.active_distribution_network_nodes[dn]
+        adn_load_idx = transmission_network.get_adn_load_idx(adn_node_id)
+        init_solution = dn_models[adn_node_id]['initial_solution']
+        for s_o in tn_model.scenarios_operation:
+            tn_model.pc[adn_load_idx, s_o].setub(init_solution['Pg'] / transmission_network.baseMVA + EQUALITY_TOLERANCE)
+            tn_model.pc[adn_load_idx, s_o].setlb(init_solution['Pg'] / transmission_network.baseMVA - EQUALITY_TOLERANCE)
+            tn_model.qc[adn_load_idx, s_o].setub(init_solution['Qg'] / transmission_network.baseMVA + EQUALITY_TOLERANCE)
+            tn_model.qc[adn_load_idx, s_o].setlb(init_solution['Qg'] / transmission_network.baseMVA - EQUALITY_TOLERANCE)
+            tn_model.flex_p_up[adn_load_idx, s_o].setub(None)
+            tn_model.flex_p_down[adn_load_idx, s_o].setub(None)
+            tn_model.flex_q_up[adn_load_idx, s_o].setub(None)
+            tn_model.flex_q_down[adn_load_idx, s_o].setub(None)
+            if transmission_network.params.l_curt:
+                tn_model.pc_curt_down[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
+                tn_model.pc_curt_up[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
+                tn_model.qc_curt_down[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
+                tn_model.qc_curt_up[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
+
+    # TN, Add expected interface values
+    tn_model.expected_interface_pf_p = pe.Var(tn_model.active_distribution_networks, domain=pe.Reals, initialize=0.00)
+    tn_model.expected_interface_pf_q = pe.Var(tn_model.active_distribution_networks, domain=pe.Reals, initialize=0.00)
+    tn_model.interface_expected_values = pe.ConstraintList()
+    for dn in tn_model.active_distribution_networks:
+        adn_node_id = transmission_network.active_distribution_network_nodes[dn]
+        adn_load_idx = transmission_network.get_adn_load_idx(adn_node_id)
+        expected_pf_p = 0.00
+        expected_pf_q = 0.00
+        for s_o in tn_model.scenarios_operation:
+            omega_oper = transmission_network.prob_operation_scenarios[s_o]
+            adn_pc = tn_model.pc[adn_load_idx, s_o] + tn_model.flex_p_up[adn_load_idx, s_o] - tn_model.flex_p_down[adn_load_idx, s_o]
+            adn_qc = tn_model.qc[adn_load_idx, s_o] + tn_model.flex_q_up[adn_load_idx, s_o] - tn_model.flex_q_down[adn_load_idx, s_o]
+            expected_pf_p += omega_oper * adn_pc
+            expected_pf_q += omega_oper * adn_qc
+        tn_model.interface_expected_values.add(tn_model.expected_interface_pf_p[dn] <= expected_pf_p + SMALL_TOLERANCE)
+        tn_model.interface_expected_values.add(tn_model.expected_interface_pf_p[dn] >= expected_pf_p - SMALL_TOLERANCE)
+        tn_model.interface_expected_values.add(tn_model.expected_interface_pf_q[dn] <= expected_pf_q + SMALL_TOLERANCE)
+        tn_model.interface_expected_values.add(tn_model.expected_interface_pf_q[dn] >= expected_pf_q - SMALL_TOLERANCE)
+
+    # TN, Add ADNs' PQ maps constraints
+    tn_model.pq_maps = pe.ConstraintList()
+    for dn in tn_model.active_distribution_networks:
+        adn_node_id = transmission_network.active_distribution_network_nodes[dn]
+        adn_pq_map = dn_models[adn_node_id]
+        for ineq in adn_pq_map['inequalities']:
+            a = ineq['Pg']
+            b = ineq['Qg']
+            c = ineq['c']
+            tn_model.pq_maps.add(a * tn_model.expected_interface_pf_p[dn] + b * tn_model.expected_interface_pf_q[dn] <= c)
+
+    # Regularization -- Added to OF to minimize deviations from scenarios to expected values
+    obj = copy(tn_model.objective.expr)
+    tn_model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
+    tn_model.penalty_regularization.fix(PENALTY_REGULARIZATION)
+    for dn in tn_model.active_distribution_networks:
+        adn_node_id = transmission_network.active_distribution_network_nodes[dn]
+        adn_load_idx = transmission_network.get_adn_load_idx(adn_node_id)
+        for s_o in tn_model.scenarios_operation:
+            obj += tn_model.penalty_regularization * transmission_network.baseMVA * (tn_model.pc[adn_load_idx, s_o] - tn_model.expected_interface_pf_p[dn]) ** 2
+            obj += tn_model.penalty_regularization * transmission_network.baseMVA * (tn_model.qc[adn_load_idx, s_o] - tn_model.expected_interface_pf_q[dn]) ** 2
+    tn_model.objective.expr = obj
+
+    results = transmission_network.optimize(tn_model)
+    process_results = transmission_network.process_results(tn_model, results)
+    transmission_network.write_optimization_results_to_excel(process_results, filename=f'{transmission_network.name}_debug')
 
 
 def create_distribution_networks_models(distribution_networks):
