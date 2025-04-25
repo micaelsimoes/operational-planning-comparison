@@ -170,6 +170,14 @@ class Network:
         print(f'[ERROR] Network {self.name}. Node ID {node_id} does not have an ADN! Check network model.')
         exit(ERROR_NETWORK_FILE)
 
+    def get_shared_energy_storage_idx(self, node_id):
+        for i in range(len(self.shared_energy_storages)):
+            shared_energy_storage = self.shared_energy_storages[i]
+            if shared_energy_storage.bus == node_id:
+                return i
+        print(f'[ERROR] Network {self.name}. Node {node_id} does not have a shared energy storage system! Check network.')
+        exit(ERROR_NETWORK_FILE)
+
     def process_results(self, model, results=dict()):
         return _process_results(self, model, results=results)
 
@@ -559,53 +567,53 @@ def _build_model(network, t):
     model.shared_energy_storage_ch_dch_exclusion = pe.ConstraintList()
     for e in model.shared_energy_storages:
 
-        shared_energy_storage = network.shared_energy_storages[e]
-        soc_init = shared_energy_storage.e_init
-        eff_charge = shared_energy_storage.eff_ch
-        eff_discharge = shared_energy_storage.eff_dch
-        max_phi = acos(shared_energy_storage.max_pf)
-        min_phi = acos(shared_energy_storage.min_pf)
+            shared_energy_storage = network.shared_energy_storages[e]
+            soc_init = shared_energy_storage.e_init
+            eff_charge = shared_energy_storage.eff_ch
+            eff_discharge = shared_energy_storage.eff_dch
+            max_phi = acos(shared_energy_storage.max_pf)
+            min_phi = acos(shared_energy_storage.min_pf)
 
-        for s_o in model.scenarios_operation:
+            for s_o in model.scenarios_operation:
 
-            sch = model.shared_es_sch[e, s_o]
-            pch = model.shared_es_pch[e, s_o]
-            qch = model.shared_es_qch[e, s_o]
-            sdch = model.shared_es_sdch[e, s_o]
-            pdch = model.shared_es_pdch[e, s_o]
-            qdch = model.shared_es_qdch[e, s_o]
+                sch = model.shared_es_sch[e, s_o]
+                pch = model.shared_es_pch[e, s_o]
+                qch = model.shared_es_qch[e, s_o]
+                sdch = model.shared_es_sdch[e, s_o]
+                pdch = model.shared_es_pdch[e, s_o]
+                qdch = model.shared_es_qdch[e, s_o]
 
-            # ESS operation
-            model.shared_energy_storage_operation.add(qch <= tan(max_phi) * pch)
-            model.shared_energy_storage_operation.add(qch >= tan(min_phi) * pch)
-            model.shared_energy_storage_operation.add(qdch <= tan(max_phi) * pdch)
-            model.shared_energy_storage_operation.add(qdch >= tan(min_phi) * pdch)
+                # ESS operation
+                model.shared_energy_storage_operation.add(qch <= tan(max_phi) * pch)
+                model.shared_energy_storage_operation.add(qch >= tan(min_phi) * pch)
+                model.shared_energy_storage_operation.add(qdch <= tan(max_phi) * pdch)
+                model.shared_energy_storage_operation.add(qdch >= tan(min_phi) * pdch)
 
-            # Pnet and Qnet definition
-            model.shared_energy_storage_operation.add(model.shared_es_pnet[e, s_o] <= pch - pdch + EQUALITY_TOLERANCE)
-            model.shared_energy_storage_operation.add(model.shared_es_pnet[e, s_o] >= pch - pdch - EQUALITY_TOLERANCE)
-            model.shared_energy_storage_operation.add(model.shared_es_qnet[e, s_o] <= qch - qdch + EQUALITY_TOLERANCE)
-            model.shared_energy_storage_operation.add(model.shared_es_qnet[e, s_o] >= qch - qdch - EQUALITY_TOLERANCE)
+                # Pnet and Qnet definition
+                model.shared_energy_storage_operation.add(model.shared_es_pnet[e, s_o] <= pch - pdch + EQUALITY_TOLERANCE)
+                model.shared_energy_storage_operation.add(model.shared_es_pnet[e, s_o] >= pch - pdch - EQUALITY_TOLERANCE)
+                model.shared_energy_storage_operation.add(model.shared_es_qnet[e, s_o] <= qch - qdch + EQUALITY_TOLERANCE)
+                model.shared_energy_storage_operation.add(model.shared_es_qnet[e, s_o] >= qch - qdch - EQUALITY_TOLERANCE)
 
-            if params.slacks.shared_ess.charging:
-                model.shared_energy_storage_operation.add(sch ** 2 == pch ** 2 + qch ** 2 + model.slack_shared_es_ch[e, s_o])
-                model.shared_energy_storage_operation.add(sdch ** 2 == pdch ** 2 + qdch ** 2 + model.slack_shared_es_dch[e, s_o])
-            else:
-                model.shared_energy_storage_operation.add(sch ** 2 <= pch ** 2 + qch ** 2 + EQUALITY_TOLERANCE)
-                model.shared_energy_storage_operation.add(sch ** 2 >= pch ** 2 + qch ** 2 - EQUALITY_TOLERANCE)
-                model.shared_energy_storage_operation.add(sdch ** 2 <= pdch ** 2 + qdch ** 2 + EQUALITY_TOLERANCE)
-                model.shared_energy_storage_operation.add(sdch ** 2 >= pdch ** 2 + qdch ** 2 - EQUALITY_TOLERANCE)
+                if params.slacks.shared_ess.charging:
+                    model.shared_energy_storage_operation.add(sch ** 2 == pch ** 2 + qch ** 2 + model.slack_shared_es_ch[e, s_o])
+                    model.shared_energy_storage_operation.add(sdch ** 2 == pdch ** 2 + qdch ** 2 + model.slack_shared_es_dch[e, s_o])
+                else:
+                    model.shared_energy_storage_operation.add(sch ** 2 <= pch ** 2 + qch ** 2 + EQUALITY_TOLERANCE)
+                    model.shared_energy_storage_operation.add(sch ** 2 >= pch ** 2 + qch ** 2 - EQUALITY_TOLERANCE)
+                    model.shared_energy_storage_operation.add(sdch ** 2 <= pdch ** 2 + qdch ** 2 + EQUALITY_TOLERANCE)
+                    model.shared_energy_storage_operation.add(sdch ** 2 >= pdch ** 2 + qdch ** 2 - EQUALITY_TOLERANCE)
 
-            # Charging/discharging complementarity constraints
-            if params.slacks.shared_ess.complementarity:
-                model.shared_energy_storage_ch_dch_exclusion.add(sch * sdch == model.slack_shared_es_comp[e, s_o])
-            else:
-                model.shared_energy_storage_ch_dch_exclusion.add(sch * sdch <= EQUALITY_TOLERANCE)
+                # Charging/discharging complementarity constraints
+                if params.slacks.shared_ess.complementarity:
+                    model.shared_energy_storage_ch_dch_exclusion.add(sch * sdch == model.slack_shared_es_comp[e, s_o])
+                else:
+                    model.shared_energy_storage_ch_dch_exclusion.add(sch * sdch <= EQUALITY_TOLERANCE)
 
-            # State-of-Charge
-            soc_prev = soc_init
-            model.shared_energy_storage_balance.add(model.shared_es_soc[e, s_o] <= soc_prev + (sch * eff_charge - sdch / eff_discharge) + EQUALITY_TOLERANCE)
-            model.shared_energy_storage_balance.add(model.shared_es_soc[e, s_o] >= soc_prev + (sch * eff_charge - sdch / eff_discharge) - EQUALITY_TOLERANCE)
+                # State-of-Charge
+                soc_prev = soc_init
+                model.shared_energy_storage_balance.add(model.shared_es_soc[e, s_o] <= soc_prev + (sch * eff_charge - sdch / eff_discharge) + EQUALITY_TOLERANCE)
+                model.shared_energy_storage_balance.add(model.shared_es_soc[e, s_o] >= soc_prev + (sch * eff_charge - sdch / eff_discharge) - EQUALITY_TOLERANCE)
 
     # - Node Balance constraints
     model.node_balance_cons_p = pe.ConstraintList()
