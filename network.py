@@ -43,15 +43,8 @@ class Network:
         self.active_distribution_network_nodes = list()
         self.params = NetworkParameters()
 
-    def determine_pq_map(self, t=0, num_steps=4):
-        vertices = _get_pq_map_vertices(self, t=t, num_steps=num_steps)
-        hull = ConvexHull(vertices)
-        hull_vertices = vertices[hull.vertices]
-        inequalities = _get_pq_map_inequalities(hull_vertices)
-        print("\nPQ Map Inequalities (a Pg + b Qg <= c):")
-        for n, (pg, qg, const) in enumerate(inequalities):
-            print(f"Edge {n + 1}: {pg:.3f}*Pg + {qg:.3f}*Qg <= {const:.3f}")
-        _plot_pq_map(self, t, num_steps, vertices, hull, hull_vertices)
+    def determine_pq_map(self, t=0, num_steps=4, print_pq_map=False):
+        return _determine_pq_map(self, t=t, num_steps=num_steps, print_pq_map=print_pq_map)
 
     def get_interface_power_flow(self, model):
         return _get_interface_power_flow(self, model)
@@ -952,6 +945,20 @@ def _build_model(network, t):
     model.dual = pe.Suffix(direction=pe.Suffix.IMPORT_EXPORT)  # Obtain dual solutions from previous solve and send to warm start
 
     return model
+
+
+
+def _determine_pq_map(network, t, num_steps, print_pq_map):
+    vertices = _get_pq_map_vertices(network, t=t, num_steps=num_steps)
+    hull = ConvexHull(vertices)
+    hull_vertices = vertices[hull.vertices]
+    inequalities = _get_pq_map_inequalities(hull_vertices)
+    if print_pq_map:
+        print("\nPQ Map Inequalities (a Pg + b Qg <= c):")
+        for n, (pg, qg, const) in enumerate(inequalities):
+            print(f"Edge {n + 1}: {pg:.3f}*Pg + {qg:.3f}*Qg <= {const:.3f}")
+        _plot_pq_map(network, t, num_steps, vertices, hull, hull_vertices)
+    return inequalities
 
 
 def _build_pq_map_model(network, t):
