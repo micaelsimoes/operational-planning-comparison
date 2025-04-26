@@ -33,8 +33,11 @@ class OperationalPlanning:
         self.active_distribution_network_nodes = list()
         self.params = ADMMParameters()
 
-    def run_hierarchical_coordination(self, t=0, num_steps=8, print_pq_map=False):
-        _run_hierarchical_coordination(self, t, num_steps, print_pq_map)
+    def run_hierarchical_coordination(self, t=0, num_steps=8, filename=str(), print_pq_map=False):
+        results, models = _run_hierarchical_coordination(self, t, num_steps, print_pq_map)
+        if not filename:
+            filename = self.name
+        self.write_operational_planning_results_to_excel(models, results, t=t, filename=filename)
 
     def run_distributed_coordination(self, t=0, consider_shared_ess=False, filename=str(), debug_flag=False):
         convergence, results, models, primal_evolution = _run_distributed_coordination(self, t, consider_shared_ess, debug_flag=debug_flag)
@@ -192,6 +195,9 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
 
     transmission_network = operational_planning.transmission_network
     distribution_networks = operational_planning.distribution_networks
+    results = {'tso': dict(), 'dso': dict()}
+
+    start = time.time()
 
     # Get DN models representation (PQ maps)
     dn_models = dict()
@@ -275,9 +281,38 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
             obj += tn_model.penalty_regularization * transmission_network.baseMVA * (tn_model.qc[adn_load_idx, s_o] - tn_model.expected_interface_pf_q[dn]) ** 2
     tn_model.objective.expr = obj
 
-    results = transmission_network.optimize(tn_model)
-    process_results = transmission_network.process_results(tn_model, t, results)
-    transmission_network.write_optimization_results_to_excel(process_results, filename=f'{transmission_network.name}_debug')
+    # Optimize TN, Get resulting interface PFs
+    results['tso'] = transmission_network.optimize(tn_model)
+    pf_requested = dict()
+    for dn in tn_model.active_distribution_networks:
+
+        adn_node_id = transmission_network.active_distribution_network_nodes[dn]
+
+        pc = pe.value(tn_model.expected_interface_pf_p[dn]) * transmission_network.baseMVA
+        qc = pe.value(tn_model.expected_interface_pf_q[dn]) * transmission_network.baseMVA
+        pf_requested[adn_node_id] = {'p': pc, 'q': qc}
+
+    # Run OPF on DNs, considering established power flow (settlement)
+    dn_models = dict()
+    for node_id in distribution_networks:
+
+        distribution_network = distribution_networks[node_id]
+        dn_model = distribution_network.build_model(t=t)
+        distribution_network.update_of_to_settlement(dn_model)
+
+        dn_model.interface_pf_p_req.fix(pf_requested[node_id]['p'] / distribution_network.baseMVA)
+        dn_model.interface_pf_q_req.fix(pf_requested[node_id]['q'] / distribution_network.baseMVA)
+        results['dso'][node_id] = distribution_network.optimize(dn_model)
+
+        dn_models[node_id] = dn_model
+
+    end = time.time()
+    total_execution_time = end - start
+    print('[INFO] \t - Execution time: {:.2f} s'.format(total_execution_time))
+
+    optim_models = {'tso': tn_model, 'dso': dn_models}
+
+    return results, optim_models
 
 
 # ======================================================================================================================

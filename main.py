@@ -66,8 +66,5 @@ if __name__ == '__main__':
     # processed_results = transmission_network.process_results(tn_model, results)
     # transmission_network.write_optimization_results_to_excel(processed_results, filename='test')
 
-    # operational_planning.run_hierarchical_coordination(t=11, num_steps=4, print_pq_map=True)
-    operational_planning.run_distributed_coordination(t=11)
-
-
-
+    operational_planning.run_hierarchical_coordination(t=11, num_steps=4, filename=f'{operational_planning.name}_hierarchical', print_pq_map=True)
+    operational_planning.run_distributed_coordination(t=11, filename=f'{operational_planning.name}_distributed')
