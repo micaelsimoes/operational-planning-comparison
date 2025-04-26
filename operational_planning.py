@@ -5,6 +5,8 @@ from math import isclose, sqrt
 from copy import copy
 import pyomo.opt as po
 import pyomo.environ as pe
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
 from network import Network
 from energy_storage import EnergyStorage
 from shared_energy_storage_data import SharedEnergyStorageData
@@ -38,15 +40,14 @@ class OperationalPlanning:
         convergence, results, models, primal_evolution = _run_distributed_coordination(self, t, consider_shared_ess, debug_flag=debug_flag)
         if not filename:
             filename = self.name
-        self.write_operational_planning_results_to_excel(models, results, filename=filename, primal_evolution=primal_evolution)
+        self.write_operational_planning_results_to_excel(models, results, t=t, filename=filename, primal_evolution=primal_evolution)
         return convergence, results, models, primal_evolution
 
-    def write_operational_planning_results_to_excel(self, optimization_models, results, filename=str(), primal_evolution=list()):
+    def write_operational_planning_results_to_excel(self, optimization_models, results, t=0, filename=str(), primal_evolution=list()):
         if not filename:
             filename = 'operational_planning_results'
-        processed_results = _process_operational_planning_results(self, optimization_models['tso'], optimization_models['dso'], optimization_models['esso'], results)
-        shared_ess_capacity = self.shared_ess_data.get_available_capacity(optimization_models['esso'])
-        _write_operational_planning_results_to_excel(self, processed_results, primal_evolution=primal_evolution, shared_ess_capacity=shared_ess_capacity, filename=filename)
+        processed_results = _process_operational_planning_results(self, optimization_models['tso'], optimization_models['dso'], results, t=t)
+        _write_operational_planning_results_to_excel(self, processed_results, t, primal_evolution=primal_evolution, filename=filename)
 
     def get_primal_value(self, tso_model, dso_models):
         return _get_primal_value(self, tso_model, dso_models)
@@ -275,7 +276,7 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
     tn_model.objective.expr = obj
 
     results = transmission_network.optimize(tn_model)
-    process_results = transmission_network.process_results(tn_model, results)
+    process_results = transmission_network.process_results(tn_model, t, results)
     transmission_network.write_optimization_results_to_excel(process_results, filename=f'{transmission_network.name}_debug')
 
 
@@ -1328,6 +1329,2402 @@ def error_within_limits(sum_abs_error, num_elems, tol):
         if not isclose(sum_abs_error, tol * num_elems, rel_tol=ADMM_CONVERGENCE_REL_TOL, abs_tol=ADMM_CONVERGENCE_ABS_TOL):
             return False
     return True
+
+
+# ======================================================================================================================
+#  RESULTS PROCESSING functions
+# ======================================================================================================================
+def _process_operational_planning_results(operational_planning, tso_model, dso_models, optimization_results, t):
+
+    transmission_network = operational_planning.transmission_network
+    distribution_networks = operational_planning.distribution_networks
+
+    processed_results = dict()
+    processed_results['tso'] = dict()
+    processed_results['dso'] = dict()
+    processed_results['interface'] = dict()
+    processed_results['summary_detail'] = dict()
+
+    processed_results['tso'] = transmission_network.process_results(tso_model, t, optimization_results['tso'])
+    for node_id in distribution_networks:
+        dso_model = dso_models[node_id]
+        distribution_network = distribution_networks[node_id]
+        processed_results['dso'][node_id] = distribution_network.process_results(dso_model, t, optimization_results['dso'][node_id])
+    processed_results['interface'] = _process_results_interface(operational_planning, tso_model, dso_models)
+    processed_results['summary_detail'] = _process_results_summary_detail(operational_planning, tso_model, dso_models, t)
+
+    return processed_results
+
+
+def _process_results_interface(operational_planning, tso_model, dso_models):
+
+    transmission_network = operational_planning.transmission_network
+    distribution_networks = operational_planning.distribution_networks
+
+    processed_results = dict()
+    processed_results['tso'] = dict()
+    processed_results['dso'] = dict()
+
+    processed_results['tso'] = transmission_network.process_results_interface(tso_model)
+    for node_id in distribution_networks:
+        dso_model = dso_models[node_id]
+        distribution_network = distribution_networks[node_id]
+        processed_results['dso'][node_id] = distribution_network.process_results_interface(dso_model)
+
+    return processed_results
+
+
+def _process_results_summary_detail(operational_planning, tso_model, dso_models, t):
+
+    transmission_network = operational_planning.transmission_network
+    distribution_networks = operational_planning.distribution_networks
+
+    processed_results = dict()
+    processed_results['tso'] = dict()
+    processed_results['dso'] = dict()
+
+    processed_results['tso'] = transmission_network.process_results_summary_detail(tso_model, t)
+    for node_id in distribution_networks:
+        dso_model = dso_models[node_id]
+        distribution_network = distribution_networks[node_id]
+        processed_results['dso'][node_id] = distribution_network.process_results_summary_detail(dso_model, t)
+
+    return processed_results
+
+
+# ======================================================================================================================
+#  RESULTS OPERATIONAL PLANNING - write functions
+# ======================================================================================================================
+def _write_operational_planning_results_to_excel(operational_planning, results, t, primal_evolution=list(), consider_shared_ess=False, filename='operation_planning'):
+
+    wb = Workbook()
+
+    _write_operational_planning_main_info_to_excel(operational_planning, wb, results, t)
+    _write_operational_planning_main_info_to_excel_detailed(operational_planning, wb, results['summary_detail'], t)
+
+    # Primal evolution
+    if primal_evolution:
+        _write_objective_function_evolution_to_excel(wb, primal_evolution)
+
+    # Interface Power Flow
+    _write_interface_results_to_excel(operational_planning, wb, t, results['interface'])
+
+    # Shared Energy Storages results
+    if consider_shared_ess:
+        _write_shared_energy_storages_results_to_excel(operational_planning, wb, t, results)
+
+    #  TSO and DSOs' results
+    _write_network_voltage_results_to_excel(operational_planning, wb, t, results)
+    _write_network_consumption_results_to_excel(operational_planning, wb, t, results)
+    _write_network_generation_results_to_excel(operational_planning, wb, t, results)
+    _write_network_branch_results_to_excel(operational_planning, wb, t, results, 'losses')
+    _write_network_branch_results_to_excel(operational_planning, wb, t, results, 'ratio')
+    _write_network_branch_loading_results_to_excel(operational_planning, wb, t, results)
+    _write_network_branch_power_flow_results_to_excel(operational_planning, wb, t, results)
+    _write_network_energy_storages_results_to_excel(operational_planning, wb, t, results)
+    _write_relaxation_slacks_results_to_excel(operational_planning, wb, t, results)
+
+    # Save results
+    results_filename = os.path.join(operational_planning.results_dir, f'{filename}_operational_planning_results.xlsx')
+    try:
+        wb.save(results_filename)
+        print('[INFO] Operational Planning Results written to {}.'.format(results_filename))
+    except:
+        from datetime import datetime
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+        backup_filename = os.path.join(operational_planning.results_dir, f"{filename.replace('.xlsx', '')}_{current_time}.xlsx")
+        print(f"[WARNING] Results saved to file {backup_filename}.xlsx")
+        wb.save(backup_filename)
+
+
+def _write_operational_planning_main_info_to_excel(operational_planning, workbook, results, t):
+
+    sheet = workbook.worksheets[0]
+    sheet.title = 'Main Info'
+
+    # Write Header
+    line_idx = 1
+    sheet.cell(row=line_idx, column=1).value = 'SO'
+    sheet.cell(row=line_idx, column=2).value = 'Node ID'
+    sheet.cell(row=line_idx, column=3).value = 'Value'
+    sheet.cell(row=line_idx, column=4).value = t
+
+    # TSO
+    line_idx = _write_operational_planning_main_info_per_operator(operational_planning.transmission_network, sheet, 'TSO', line_idx, results['tso'])
+
+    # DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        line_idx = _write_operational_planning_main_info_per_operator(distribution_network, sheet, 'DSO', line_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_operational_planning_main_info_per_operator(network, sheet, operator_type, line_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+
+    # - Objective
+    obj_string = 'Objective'
+    if network.params.obj_type == OBJ_MIN_COST:
+        obj_string += ' (cost), [€]'
+    elif network.params.obj_type == OBJ_CONGESTION_MANAGEMENT:
+        obj_string += ' (congestion management)'
+    sheet.cell(row=line_idx, column=3).value = obj_string
+    sheet.cell(row=line_idx, column=4).value = results['obj']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Load
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Load, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_load']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Load, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_load']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Flexibility used
+    if network.params.fl_reg:
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Flexibility used, [MWh]'
+        sheet.cell(row=line_idx, column=4).value = results['flex_used']['p']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Flexibility used, [MVArh]'
+        sheet.cell(row=line_idx, column=4).value = results['flex_used']['q']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Load curtailed
+    if network.params.l_curt:
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Load curtailed, [MWh]'
+        sheet.cell(row=line_idx, column=4).value = results['load_curt']['p']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Load curtailed, [MVArh]'
+        sheet.cell(row=line_idx, column=4).value = results['load_curt']['q']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Generation
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Generation, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_gen']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_gen']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Conventional Generation
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Conventional Generation, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_conventional_gen']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Conventional Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_conventional_gen']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Renewable Generation
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Renewable generation, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_renewable_gen']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Renewable generation, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_renewable_gen']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Renewable generation, [MVAh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_renewable_gen']['s']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Renewable Generation Curtailed
+    if network.params.rg_curt:
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Renewable generation curtailed, [MVAh]'
+        sheet.cell(row=line_idx, column=4).value = results['gen_curt']['s']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Losses
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Losses, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['losses']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Number of operation (generation and consumption) scenarios
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Number of operation scenarios'
+    sheet.cell(row=line_idx, column=4).value = len(network.prob_operation_scenarios)
+
+    return line_idx
+
+
+def _write_operational_planning_main_info_to_excel_detailed(operational_planning, workbook, results, t):
+
+    sheet = workbook.create_sheet('Main Info, Detailed')
+
+    # Write Header -- Year
+    line_idx = 1
+    sheet.cell(row=line_idx, column=1).value = 'Operator'
+    sheet.cell(row=line_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=line_idx, column=3).value = 'Operation Scenario'
+    sheet.cell(row=line_idx, column=4).value = 'Probability, [%]'
+    sheet.cell(row=line_idx, column=5).value = 'OF Value'
+    sheet.cell(row=line_idx, column=6).value = 'Load, [MWh]'
+    sheet.cell(row=line_idx, column=7).value = 'Load, [MVArh]'
+    sheet.cell(row=line_idx, column=8).value = 'Flexibility used, [MWh]'
+    sheet.cell(row=line_idx, column=9).value = 'Flexibility used, [MVArh]'
+    sheet.cell(row=line_idx, column=10).value = 'Flexibility Cost, [€]'
+    sheet.cell(row=line_idx, column=11).value = 'Generation, [MWh]'
+    sheet.cell(row=line_idx, column=12).value = 'Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=13).value = 'Conventional Generation, [MWh]'
+    sheet.cell(row=line_idx, column=14).value = 'Conventional Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=15).value = 'Conventional Generation Cost, [€]'
+    sheet.cell(row=line_idx, column=16).value = 'Renewable Generation, [MWh]'
+    sheet.cell(row=line_idx, column=17).value = 'Renewable Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=18).value = 'Renewable Generation, [MVAh]'
+    sheet.cell(row=line_idx, column=19).value = 'Renewable Generation Curtailed, [MVAh]'
+    sheet.cell(row=line_idx, column=20).value = 'Losses, [MWh]'
+
+    # TSO
+    line_idx += 1
+    line_idx = _write_operational_planning_main_info_per_operator_detailed(sheet, 'TSO', line_idx, results['tso'])
+
+    # DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        line_idx = _write_operational_planning_main_info_per_operator_detailed(sheet, 'DSO', line_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_operational_planning_main_info_per_operator_detailed(sheet, operator_type, line_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+    percent_style = '0.00%'
+
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    for s_o in results['scenarios']:
+
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = s_o
+
+        # Probability, [%]
+        sheet.cell(row=line_idx, column=4).value = results['scenarios'][s_o]['probability']
+        sheet.cell(row=line_idx, column=4).number_format = percent_style
+
+        # OF
+        sheet.cell(row=line_idx, column=5).value = results['scenarios'][s_o]['obj']
+        sheet.cell(row=line_idx, column=5).number_format = decimal_style
+
+        # Load
+        sheet.cell(row=line_idx, column=6).value = results['scenarios'][s_o]['load']['p']
+        sheet.cell(row=line_idx, column=6).number_format = decimal_style
+        sheet.cell(row=line_idx, column=7).value = results['scenarios'][s_o]['load']['q']
+        sheet.cell(row=line_idx, column=7).number_format = decimal_style
+
+        # Flexibility
+        sheet.cell(row=line_idx, column=8).value = results['scenarios'][s_o]['flexibility']['p']
+        sheet.cell(row=line_idx, column=8).number_format = decimal_style
+        sheet.cell(row=line_idx, column=9).value = results['scenarios'][s_o]['flexibility']['q']
+        sheet.cell(row=line_idx, column=9).number_format = decimal_style
+
+        # Flexibility Cost, [€]
+        sheet.cell(row=line_idx, column=10).value = results['scenarios'][s_o]['cost_flexibility']
+        sheet.cell(row=line_idx, column=10).number_format = decimal_style
+
+        # Generation
+        sheet.cell(row=line_idx, column=11).value = results['scenarios'][s_o]['generation']['p']
+        sheet.cell(row=line_idx, column=11).number_format = decimal_style
+        sheet.cell(row=line_idx, column=12).value = results['scenarios'][s_o]['generation']['q']
+        sheet.cell(row=line_idx, column=12).number_format = decimal_style
+
+        # Conventional Generation
+        sheet.cell(row=line_idx, column=13).value = results['scenarios'][s_o]['generation_conventional']['p']
+        sheet.cell(row=line_idx, column=13).number_format = decimal_style
+        sheet.cell(row=line_idx, column=14).value = results['scenarios'][s_o]['generation_conventional']['q']
+        sheet.cell(row=line_idx, column=14).number_format = decimal_style
+
+        # Conventional Generation Cost
+        sheet.cell(row=line_idx, column=15).value = results['scenarios'][s_o]['generation_conventional_cost']
+        sheet.cell(row=line_idx, column=15).number_format = decimal_style
+
+        # Renewable Generation
+        sheet.cell(row=line_idx, column=16).value = results['scenarios'][s_o]['generation_renewable']['p']
+        sheet.cell(row=line_idx, column=16).number_format = decimal_style
+        sheet.cell(row=line_idx, column=17).value = results['scenarios'][s_o]['generation_renewable']['q']
+        sheet.cell(row=line_idx, column=17).number_format = decimal_style
+        sheet.cell(row=line_idx, column=18).value = results['scenarios'][s_o]['generation_renewable']['s']
+        sheet.cell(row=line_idx, column=18).number_format = decimal_style
+        sheet.cell(row=line_idx, column=19).value = results['scenarios'][s_o]['generation_renewable_curtailed']['s']
+        sheet.cell(row=line_idx, column=19).number_format = decimal_style
+
+        # Losses
+        sheet.cell(row=line_idx, column=20).value = results['scenarios'][s_o]['losses']
+        sheet.cell(row=line_idx, column=20).number_format = decimal_style
+
+        line_idx += 1
+
+    return line_idx
+
+
+def _write_objective_function_evolution_to_excel(workbook, primal_evolution):
+
+    sheet = workbook.create_sheet('Primal Evolution')
+
+    decimal_style = '0.000000'
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Iteration'
+    sheet.cell(row=row_idx, column=2).value = 'OF value'
+    row_idx = row_idx + 1
+    for i in range(len(primal_evolution)):
+        sheet.cell(row=row_idx, column=1).value = i
+        sheet.cell(row=row_idx, column=2).value = primal_evolution[i]
+        sheet.cell(row=row_idx, column=2).number_format = decimal_style
+        sheet.cell(row=row_idx, column=2).value = primal_evolution[i]
+        sheet.cell(row=row_idx, column=2).number_format = decimal_style
+        row_idx = row_idx + 1
+
+
+def _write_interface_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Interface PF')
+
+    row_idx = 1
+    decimal_style = '0.00'
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Node ID'
+    sheet.cell(row=row_idx, column=2).value = 'Operator'
+    sheet.cell(row=row_idx, column=3).value = 'Quantity'
+    sheet.cell(row=row_idx, column=4).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=5).value = t
+    row_idx = row_idx + 1
+
+    # TSO's results
+    for node_id in results['tso']:
+
+        expected_vmag = 0.00
+        expected_p = 0.00
+        expected_q = 0.00
+
+        for s_o in results['tso'][node_id]:
+
+            omega_s = operational_planning.transmission_network.prob_operation_scenarios[s_o]
+            interface_vmag = results['tso'][node_id][s_o]['v']
+            interface_p = results['tso'][node_id][s_o]['p']
+            interface_q = results['tso'][node_id][s_o]['q']
+
+            # Voltage magnitude
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'Vmag, [p.u.]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = interface_vmag
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_vmag += interface_vmag * omega_s
+            row_idx += 1
+
+            # Active Power
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = interface_p
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_p += interface_p * omega_s
+            row_idx += 1
+
+            # Reactive Power
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = interface_q
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_q += interface_q * omega_s
+            row_idx += 1
+
+        # Expected Active Power
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'Vmag, [p.u.]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_vmag
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx += 1
+
+        # Expected Active Power
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_p
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx += 1
+
+        # Expected Reactive Power
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_q
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx += 1
+
+    # DSOs' results
+    for node_id in results['dso']:
+
+        expected_vmag = 0.00
+        expected_p = 0.00
+        expected_q = 0.00
+
+        for s_o in results['dso'][node_id]:
+
+            omega_s = operational_planning.distribution_networks[node_id].prob_operation_scenarios[s_o]
+            interface_vmag = results['dso'][node_id][s_o]['v']
+            interface_p = results['dso'][node_id][s_o]['p']
+            interface_q = results['dso'][node_id][s_o]['q']
+
+            # Voltage magnitude
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'Vmag, [p.u.]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = interface_vmag
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_vmag += interface_vmag * omega_s
+            row_idx += 1
+
+            # Active Power
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = interface_p
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_p += interface_p * omega_s
+            row_idx += 1
+
+            # Reactive Power
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = interface_q
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            expected_q += interface_q * omega_s
+            row_idx += 1
+
+        # Expected Voltage magnitude
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'Vmag, [p.u.]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_vmag
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx += 1
+
+        # Expected Active Power
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_p
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx += 1
+
+        # Expected Reactive Power
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_q
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+        row_idx += 1
+
+
+def _write_shared_energy_storages_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Shared ESS')
+
+    row_idx = 1
+    decimal_style = '0.00'
+    percent_style = '0.00%'
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Node ID'
+    sheet.cell(row=row_idx, column=2).value = 'Operator'
+    sheet.cell(row=row_idx, column=3).value = 'Quantity'
+    sheet.cell(row=row_idx, column=4).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=5).value = t
+
+    # TSO's results
+    expected_p = dict()
+    expected_q = dict()
+    expected_s = dict()
+    expected_soc = dict()
+    expected_soc_percent = dict()
+    for node_id in operational_planning.active_distribution_network_nodes:
+        expected_p[node_id] = 0.00
+        expected_q[node_id] = 0.00
+        expected_s[node_id] = 0.00
+        expected_soc[node_id] = 0.00
+        expected_soc_percent[node_id] = 0.00
+
+    for s_o in results['tso']['results']['scenarios']:
+
+        omega_s = operational_planning.transmission_network.prob_operation_scenarios[s_o]
+
+        for node_id in operational_planning.active_distribution_network_nodes:
+
+            ess_p = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['p'][node_id]
+            ess_q = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['q'][node_id]
+            ess_s = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['s'][node_id]
+            ess_soc = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['soc'][node_id]
+            ess_soc_percent = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['soc_percent'][node_id]
+
+            # Active power
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_p
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_p != 'N/A':
+                expected_p[node_id] += ess_p * omega_s
+            else:
+                expected_p[node_id] = ess_p
+
+            # Reactive power
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_q
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_q != 'N/A':
+                expected_q[node_id] += ess_q * omega_s
+            else:
+                expected_q[node_id] = ess_q
+
+            # Apparent power
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_s
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_s != 'N/A':
+                expected_s[node_id] += ess_s * omega_s
+            else:
+                expected_s[node_id] = ess_s
+
+            # State-of-Charge, [MVAh]
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'SoC, [MVAh]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_soc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_soc != 'N/A':
+                expected_soc[node_id] += ess_soc * omega_s
+            else:
+                expected_soc[node_id] = ess_soc
+
+            # State-of-Charge, [%]
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'TSO'
+            sheet.cell(row=row_idx, column=3).value = 'SoC, [%]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_soc_percent
+            sheet.cell(row=row_idx, column=5).number_format = percent_style
+            if ess_soc_percent != 'N/A':
+                expected_soc_percent[node_id] += ess_soc_percent * omega_s
+            else:
+                expected_soc_percent[node_id] = ess_soc_percent
+
+    for node_id in operational_planning.active_distribution_network_nodes:
+
+        # Active Power, [MW]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_p[node_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # Reactive Power, [MVAr]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_q[node_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # Apparent Power, [MVA]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_s[node_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # State-of-Charge, [MVAh]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'SoC, [MVAh]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_soc[node_id]
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # State-of-Charge, [%]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'TSO'
+        sheet.cell(row=row_idx, column=3).value = 'SoC, [%]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_soc_percent[node_id]
+        sheet.cell(row=row_idx, column=5).number_format = percent_style
+
+    # DSO's results
+    for node_id in results['dso']:
+
+        distribution_network = operational_planning.distribution_networks[node_id]
+        ref_node_id = distribution_network.get_reference_node_id()
+
+        expected_p = 0.00
+        expected_q = 0.00
+        expected_s = 0.00
+        expected_soc = 0.00
+        expected_soc_percent = 0.00
+
+        for s_o in results['dso'][node_id]['results']['scenarios']:
+
+            omega_s = distribution_network.prob_operation_scenarios[s_o]
+            ess_p = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['p'][ref_node_id]
+            ess_q = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['q'][ref_node_id]
+            ess_s = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['s'][ref_node_id]
+            ess_soc = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['soc'][ref_node_id]
+            ess_soc_percent = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['soc_percent'][ref_node_id]
+
+            # Active power
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_p
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_p != 'N/A':
+                expected_p += ess_p * omega_s
+            else:
+                expected_p = ess_p
+
+            # Reactive power
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_q
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_q != 'N/A':
+                expected_q += ess_q * omega_s
+            else:
+                expected_q = ess_q
+
+            # Apparent power
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_s
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_s != 'N/A':
+                expected_s += ess_s * omega_s
+            else:
+                expected_s = ess_s
+
+            # State-of-Charge, [MVAh]
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'SoC, [MVAh]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_soc
+            sheet.cell(row=row_idx, column=5).number_format = decimal_style
+            if ess_soc != 'N/A':
+                expected_soc += ess_soc * omega_s
+            else:
+                expected_soc = ess_soc
+
+            # State-of-Charge, [%]
+            row_idx = row_idx + 1
+            sheet.cell(row=row_idx, column=1).value = node_id
+            sheet.cell(row=row_idx, column=2).value = 'DSO'
+            sheet.cell(row=row_idx, column=3).value = 'SoC, [%]'
+            sheet.cell(row=row_idx, column=4).value = s_o
+            sheet.cell(row=row_idx, column=5).value = ess_soc_percent
+            sheet.cell(row=row_idx, column=5).number_format = percent_style
+            if ess_soc_percent != 'N/A':
+                expected_soc_percent += ess_soc_percent * omega_s
+            else:
+                expected_soc_percent = ess_soc_percent
+
+        # Expected values
+
+        # Active Power, [MW]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_p
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # Reactive Power, [MW]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_q
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # Apparent Power, [MW]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_s
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # State-of-Charge, [MVAh]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'SoC, [MVAh]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_soc
+        sheet.cell(row=row_idx, column=5).number_format = decimal_style
+
+        # State-of-Charge, [%]
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = node_id
+        sheet.cell(row=row_idx, column=2).value = 'DSO'
+        sheet.cell(row=row_idx, column=3).value = 'SoC, [%]'
+        sheet.cell(row=row_idx, column=4).value = 'Expected'
+        sheet.cell(row=row_idx, column=5).value = expected_soc_percent
+        sheet.cell(row=row_idx, column=5).number_format = percent_style
+
+
+def _write_network_voltage_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Voltage')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Network Node ID'
+    sheet.cell(row=row_idx, column=4).value = 'Quantity'
+    sheet.cell(row=row_idx, column=5).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=6).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    transmission_network = operational_planning.transmission_network
+    row_idx = _write_network_voltage_results_per_operator(transmission_network, sheet, 'TSO', row_idx, results['tso'])
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        row_idx = _write_network_voltage_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_network_voltage_results_per_operator(network, sheet, operator_type, row_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    ref_node_id = network.get_reference_node_id()
+    expected_vmag = dict()
+    expected_vang = dict()
+    for node in network.nodes:
+        expected_vmag[node.bus_i] = 0.00
+        expected_vang[node.bus_i] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for node_id in results['scenarios'][s_o]['voltage']['vmag']:
+
+            v_min, v_max = network.get_node_voltage_limits(node_id)
+            v_mag = results['scenarios'][s_o]['voltage']['vmag'][node_id]
+            v_ang = results['scenarios'][s_o]['voltage']['vang'][node_id]
+
+            # Voltage magnitude
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = node_id
+            sheet.cell(row=row_idx, column=4).value = 'Vmag, [p.u.]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = v_mag
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            if node_id != ref_node_id and (v_mag > v_max + SMALL_TOLERANCE or v_mag < v_min - SMALL_TOLERANCE):
+                sheet.cell(row=row_idx, column=6).fill = violation_fill
+            expected_vmag[node_id] += v_mag * omega_s
+            row_idx = row_idx + 1
+
+            # Voltage angle
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = node_id
+            sheet.cell(row=row_idx, column=4).value = 'Vang, [º]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = v_ang
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_vang[node_id] += v_ang * omega_s
+            row_idx = row_idx + 1
+
+    for node in network.nodes:
+
+        node_id = node.bus_i
+        v_min, v_max = network.get_node_voltage_limits(node_id)
+
+        # Expected voltage magnitude
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = node_id
+        sheet.cell(row=row_idx, column=4).value = 'Vmag, [p.u.]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_vmag[node_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        if node_id != ref_node_id and (expected_vmag[node_id] > v_max + SMALL_TOLERANCE or expected_vmag[node_id] < v_min - SMALL_TOLERANCE):
+            sheet.cell(row=row_idx, column=6).fill = violation_fill
+        row_idx = row_idx + 1
+
+        # Expected voltage angle
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = node_id
+        sheet.cell(row=row_idx, column=4).value = 'Vang, [º]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_vang[node_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
+
+    return row_idx
+
+
+def _write_network_consumption_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Consumption')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Load ID'
+    sheet.cell(row=row_idx, column=4).value = 'Node ID'
+    sheet.cell(row=row_idx, column=5).value = 'Quantity'
+    sheet.cell(row=row_idx, column=6).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=7).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    tso_results = results['tso']
+    transmission_network = operational_planning.transmission_network
+    row_idx = _write_network_consumption_results_per_operator(transmission_network, sheet, 'TSO', row_idx, tso_results)
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        row_idx = _write_network_consumption_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_network_consumption_results_per_operator(network, sheet, operator_type, row_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    expected_pc = dict()
+    expected_flex_p = dict()
+    expected_pc_curt = dict()
+    expected_pnet = dict()
+    expected_qc = dict()
+    expected_flex_q = dict()
+    expected_qc_curt = dict()
+    expected_qnet = dict()
+    for load in network.loads:
+        expected_pc[load.load_id] = 0.00
+        expected_flex_p[load.load_id] = 0.00
+        expected_pc_curt[load.load_id] = 0.00
+        expected_pnet[load.load_id] = 0.00
+        expected_qc[load.load_id] = 0.00
+        expected_flex_q[load.load_id] = 0.00
+        expected_qc_curt[load.load_id] = 0.00
+        expected_qnet[load.load_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for load in network.loads:
+
+            pc = results['scenarios'][s_o]['consumption']['pc'][load.load_id]
+            qc = results['scenarios'][s_o]['consumption']['qc'][load.load_id]
+
+            # - Active Power
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Pc, [MW]'
+            sheet.cell(row=row_idx, column=6).value = s_o
+            sheet.cell(row=row_idx, column=7).value = pc
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            expected_pc[load.load_id] += pc * omega_s
+            row_idx = row_idx + 1
+
+            if network.params.fl_reg:
+
+                pc_flex = results['scenarios'][s_o]['consumption']['pc_flex'][load.load_id]
+
+                # - Flexibility, active
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = load.load_id
+                sheet.cell(row=row_idx, column=4).value = load.bus
+                sheet.cell(row=row_idx, column=5).value = 'Pc_flex, [MW]'
+                sheet.cell(row=row_idx, column=6).value = s_o
+                sheet.cell(row=row_idx, column=7).value = pc_flex
+                sheet.cell(row=row_idx, column=7).number_format = decimal_style
+                expected_flex_p[load.load_id] += pc_flex * omega_s
+                row_idx = row_idx + 1
+
+            if network.params.l_curt:
+
+                pc_curt = results['scenarios'][s_o]['consumption']['pc_curt'][load.load_id]
+
+                # - Active power curtailment
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = load.load_id
+                sheet.cell(row=row_idx, column=4).value = load.bus
+                sheet.cell(row=row_idx, column=5).value = 'Pc_curt, [MW]'
+                sheet.cell(row=row_idx, column=6).value = s_o
+                sheet.cell(row=row_idx, column=7).value = pc_curt
+                sheet.cell(row=row_idx, column=7).number_format = decimal_style
+                if pc_curt >= SMALL_TOLERANCE:
+                    sheet.cell(row=row_idx, column=7).fill = violation_fill
+                expected_pc_curt[load.load_id] += pc_curt * omega_s
+                row_idx = row_idx + 1
+
+            if network.params.fl_reg or network.params.l_curt:
+
+                p_net = results['scenarios'][s_o]['consumption']['pc_net'][load.load_id]
+
+                # - Active power net consumption
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = load.load_id
+                sheet.cell(row=row_idx, column=4).value = load.bus
+                sheet.cell(row=row_idx, column=5).value = 'Pc_net, [MW]'
+                sheet.cell(row=row_idx, column=6).value = s_o
+                sheet.cell(row=row_idx, column=7).value = p_net
+                sheet.cell(row=row_idx, column=7).number_format = decimal_style
+                expected_pnet[load.load_id] += p_net * omega_s
+                row_idx = row_idx + 1
+
+            # - Reactive power
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Qc, [MVAr]'
+            sheet.cell(row=row_idx, column=6).value = s_o
+            sheet.cell(row=row_idx, column=7).value = qc
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            expected_qc[load.load_id] += qc * omega_s
+            row_idx = row_idx + 1
+
+            if network.params.fl_reg:
+
+                qc_flex = results['scenarios'][s_o]['consumption']['qc_flex'][load.load_id]
+
+                # - Flexibility, active
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = load.load_id
+                sheet.cell(row=row_idx, column=4).value = load.bus
+                sheet.cell(row=row_idx, column=5).value = 'Qc_flex, [MVAr]'
+                sheet.cell(row=row_idx, column=6).value = s_o
+                sheet.cell(row=row_idx, column=7).value = qc_flex
+                sheet.cell(row=row_idx, column=7).number_format = decimal_style
+                expected_flex_q[load.load_id] += qc_flex * omega_s
+                row_idx = row_idx + 1
+
+            if network.params.l_curt:
+
+                qc_curt = results['scenarios'][s_o]['consumption']['qc_curt'][load.load_id]
+
+                # - Active power curtailment
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = load.load_id
+                sheet.cell(row=row_idx, column=4).value = load.bus
+                sheet.cell(row=row_idx, column=5).value = 'Qc_curt, [MVAr]'
+                sheet.cell(row=row_idx, column=6).value = s_o
+                sheet.cell(row=row_idx, column=7).value = qc_curt
+                sheet.cell(row=row_idx, column=7).number_format = decimal_style
+                if qc_curt >= SMALL_TOLERANCE:
+                    sheet.cell(row=row_idx, column=7).fill = violation_fill
+                expected_qc_curt[load.load_id] += qc_curt * omega_s
+                row_idx = row_idx + 1
+
+            if network.params.fl_reg or network.params.l_curt:
+
+                q_net = results['scenarios'][s_o]['consumption']['qc_net'][load.load_id]
+
+                # - Active power net consumption
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = load.load_id
+                sheet.cell(row=row_idx, column=4).value = load.bus
+                sheet.cell(row=row_idx, column=5).value = 'Qc_net, [MVAr]'
+                sheet.cell(row=row_idx, column=6).value = s_o
+                sheet.cell(row=row_idx, column=7).value = q_net
+                sheet.cell(row=row_idx, column=7).number_format = decimal_style
+                expected_qnet[load.load_id] += q_net * omega_s
+                row_idx = row_idx + 1
+
+    for load in network.loads:
+
+        # - Active Power
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = load.load_id
+        sheet.cell(row=row_idx, column=4).value = load.bus
+        sheet.cell(row=row_idx, column=5).value = 'Pc, [MW]'
+        sheet.cell(row=row_idx, column=6).value = 'Expected'
+        sheet.cell(row=row_idx, column=7).value = expected_pc[load.load_id]
+        sheet.cell(row=row_idx, column=7).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        if network.params.fl_reg:
+
+            # - Flexibility, active
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Pc_flex, [MW]'
+            sheet.cell(row=row_idx, column=6).value = 'Expected'
+            sheet.cell(row=row_idx, column=7).value = expected_flex_p[load.load_id]
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        if network.params.l_curt:
+
+            # - Load curtailment (active power)
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Pc_curt, [MW]'
+            sheet.cell(row=row_idx, column=6).value = 'Expected'
+            sheet.cell(row=row_idx, column=7).value = expected_pc_curt[load.load_id]
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            if expected_pc_curt[load.load_id] >= SMALL_TOLERANCE:
+                sheet.cell(row=row_idx, column=7).fill = violation_fill
+            row_idx = row_idx + 1
+
+        if network.params.fl_reg or network.params.l_curt:
+
+            # - Active power net consumption
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Pc_net, [MW]'
+            sheet.cell(row=row_idx, column=6).value = 'Expected'
+            sheet.cell(row=row_idx, column=7).value = expected_pnet[load.load_id]
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        # - Reactive power
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = load.load_id
+        sheet.cell(row=row_idx, column=4).value = load.bus
+        sheet.cell(row=row_idx, column=5).value = 'Qc, [MVAr]'
+        sheet.cell(row=row_idx, column=6).value = 'Expected'
+        sheet.cell(row=row_idx, column=7).value = expected_qc[load.load_id]
+        sheet.cell(row=row_idx, column=7).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        if network.params.fl_reg:
+
+            # - Flexibility, reactive
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Qc_flex, [MVAr]'
+            sheet.cell(row=row_idx, column=6).value = 'Expected'
+            sheet.cell(row=row_idx, column=7).value = expected_flex_q[load.load_id]
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        if network.params.l_curt:
+
+            # - Load curtailment (reactive power)
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Qc_curt, [MVAr]'
+            sheet.cell(row=row_idx, column=6).value = 'Expected'
+            sheet.cell(row=row_idx, column=7).value = expected_qc_curt[load.load_id]
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            if expected_qc_curt[load.load_id] >= SMALL_TOLERANCE:
+                sheet.cell(row=row_idx, column=7).fill = violation_fill
+            row_idx = row_idx + 1
+
+        if network.params.fl_reg or network.params.l_curt:
+
+            # - Reactive power net consumption
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = load.load_id
+            sheet.cell(row=row_idx, column=4).value = load.bus
+            sheet.cell(row=row_idx, column=5).value = 'Qc_net, [MVAr]'
+            sheet.cell(row=row_idx, column=6).value = 'Expected'
+            sheet.cell(row=row_idx, column=7).value = expected_qnet[load.load_id]
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            row_idx = row_idx + 1
+
+    return row_idx
+
+
+def _write_network_generation_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Generation')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Generator ID'
+    sheet.cell(row=row_idx, column=4).value = 'Node ID'
+    sheet.cell(row=row_idx, column=5).value = 'Type'
+    sheet.cell(row=row_idx, column=6).value = 'Quantity'
+    sheet.cell(row=row_idx, column=7).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=8).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    transmission_network = operational_planning.transmission_network
+    row_idx = _write_network_generation_results_per_operator(transmission_network, sheet, 'TSO', row_idx, results['tso'])
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        row_idx = _write_network_generation_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_network_generation_results_per_operator(network, sheet, operator_type, row_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    expected_pg = dict()
+    expected_pg_net = dict()
+    expected_qg = dict()
+    expected_qg_net = dict()
+    expected_sg = dict()
+    expected_sg_curt = dict()
+    expected_sg_net = dict()
+    for generator in network.generators:
+        expected_pg[generator.gen_id] = 0.00
+        expected_qg[generator.gen_id] = 0.00
+        expected_sg[generator.gen_id] = 0.00
+        expected_pg_net[generator.gen_id] = 0.00
+        expected_qg_net[generator.gen_id] = 0.00
+        expected_sg_curt[generator.gen_id] = 0.00
+        expected_sg_net[generator.gen_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for generator in network.generators:
+
+            node_id = generator.bus
+            gen_id = generator.gen_id
+            gen_type = network.get_gen_type(gen_id)
+            pg = results['scenarios'][s_o]['generation']['pg'][gen_id]
+            qg = results['scenarios'][s_o]['generation']['qg'][gen_id]
+
+            # Active Power
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = gen_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = gen_type
+            sheet.cell(row=row_idx, column=6).value = 'Pg, [MW]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = pg
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_pg[gen_id] += pg * omega_s
+            row_idx = row_idx + 1
+
+            # Active Power net
+            if generator.is_curtaillable() and network.params.rg_curt:
+
+                pg_net = results['scenarios'][s_o]['generation']['pg_net'][gen_id]
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = gen_id
+                sheet.cell(row=row_idx, column=4).value = node_id
+                sheet.cell(row=row_idx, column=5).value = gen_type
+                sheet.cell(row=row_idx, column=6).value = 'Pg_net, [MW]'
+                sheet.cell(row=row_idx, column=7).value = s_o
+                sheet.cell(row=row_idx, column=8).value = pg_net
+                sheet.cell(row=row_idx, column=8).number_format = decimal_style
+                expected_pg_net[gen_id] += pg_net * omega_s
+                row_idx = row_idx + 1
+
+            # Reactive Power
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = gen_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = gen_type
+            sheet.cell(row=row_idx, column=6).value = 'Qg, [MVAr]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = qg
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_qg[gen_id] += qg * omega_s
+            row_idx = row_idx + 1
+
+            # Reactive Power net
+            if generator.is_curtaillable() and network.params.rg_curt:
+
+                qg_net = results['scenarios'][s_o]['generation']['qg_net'][gen_id]
+
+                # Reactive Power net
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = gen_id
+                sheet.cell(row=row_idx, column=4).value = node_id
+                sheet.cell(row=row_idx, column=5).value = gen_type
+                sheet.cell(row=row_idx, column=6).value = 'Qg_net, [MVAr]'
+                sheet.cell(row=row_idx, column=7).value = s_o
+                sheet.cell(row=row_idx, column=8).value = qg_net
+                sheet.cell(row=row_idx, column=8).number_format = decimal_style
+                expected_qg_net[gen_id] += qg_net * omega_s
+                row_idx = row_idx + 1
+
+            # Apparent Power
+            if generator.is_curtaillable() and network.params.rg_curt:
+
+                sg = results['scenarios'][s_o]['generation']['sg'][gen_id]
+                sg_curt = results['scenarios'][s_o]['generation']['sg_curt'][gen_id]
+                sg_net = results['scenarios'][s_o]['generation']['sg_net'][gen_id]
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = gen_id
+                sheet.cell(row=row_idx, column=4).value = node_id
+                sheet.cell(row=row_idx, column=5).value = gen_type
+                sheet.cell(row=row_idx, column=6).value = 'Sg, [MVA]'
+                sheet.cell(row=row_idx, column=7).value = s_o
+                sheet.cell(row=row_idx, column=8).value = sg
+                sheet.cell(row=row_idx, column=8).number_format = decimal_style
+                expected_sg[gen_id] += sg * omega_s
+                row_idx = row_idx + 1
+
+                # Apparent Power curtailment
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = gen_id
+                sheet.cell(row=row_idx, column=4).value = node_id
+                sheet.cell(row=row_idx, column=5).value = gen_type
+                sheet.cell(row=row_idx, column=6).value = 'Sg_curt, [MVA]'
+                sheet.cell(row=row_idx, column=7).value = s_o
+                sheet.cell(row=row_idx, column=8).value = sg_curt
+                sheet.cell(row=row_idx, column=8).number_format = decimal_style
+                if not isclose(sg_curt, 0.00, abs_tol=VIOLATION_TOLERANCE):
+                    sheet.cell(row=row_idx, column=8).fill = violation_fill
+                expected_sg_curt[gen_id] += sg_curt * omega_s
+                row_idx = row_idx + 1
+
+                # Apparent Power Net
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = gen_id
+                sheet.cell(row=row_idx, column=4).value = node_id
+                sheet.cell(row=row_idx, column=5).value = gen_type
+                sheet.cell(row=row_idx, column=6).value = 'Sg_net, [MVA]'
+                sheet.cell(row=row_idx, column=7).value = s_o
+                sheet.cell(row=row_idx, column=8).value = sg_net
+                sheet.cell(row=row_idx, column=8).number_format = decimal_style
+                expected_sg_net[gen_id] += sg_net * omega_s
+                row_idx = row_idx + 1
+
+    for generator in network.generators:
+
+        node_id = generator.bus
+        gen_id = generator.gen_id
+        gen_type = network.get_gen_type(gen_id)
+
+        # Active Power
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = gen_id
+        sheet.cell(row=row_idx, column=4).value = node_id
+        sheet.cell(row=row_idx, column=5).value = gen_type
+        sheet.cell(row=row_idx, column=6).value = 'Pg, [MW]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = '-'
+        sheet.cell(row=row_idx, column=8).value = expected_pg[gen_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Active Power Net
+        if generator.is_curtaillable() and network.params.rg_curt:
+
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = gen_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = gen_type
+            sheet.cell(row=row_idx, column=6).value = 'Pg_net, [MW]'
+            sheet.cell(row=row_idx, column=7).value = 'Expected'
+            sheet.cell(row=row_idx, column=8).value = expected_pg_net[gen_id]
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        # Reactive Power
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = gen_id
+        sheet.cell(row=row_idx, column=4).value = node_id
+        sheet.cell(row=row_idx, column=5).value = gen_type
+        sheet.cell(row=row_idx, column=6).value = 'Qg, [MVAr]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = expected_qg[gen_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Reactive Power net
+        if generator.is_curtaillable() and network.params.rg_curt:
+
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = gen_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = gen_type
+            sheet.cell(row=row_idx, column=6).value = 'Qg_net, [MVAr]'
+            sheet.cell(row=row_idx, column=7).value = 'Expected'
+            sheet.cell(row=row_idx, column=8).value = expected_qg_net[gen_id]
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            row_idx = row_idx + 1
+
+        # Apparent Power
+        if generator.is_curtaillable() and network.params.rg_curt:
+
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = gen_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = gen_type
+            sheet.cell(row=row_idx, column=6).value = 'Sg, [MVA]'
+            sheet.cell(row=row_idx, column=7).value = 'Expected'
+            sheet.cell(row=row_idx, column=8).value = expected_sg[gen_id]
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            row_idx = row_idx + 1
+
+            # Apparent Power curtailment
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = gen_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = gen_type
+            sheet.cell(row=row_idx, column=6).value = 'Sg_curt, [MVA]'
+            sheet.cell(row=row_idx, column=7).value = 'Expected'
+            sheet.cell(row=row_idx, column=8).value = expected_sg_curt[gen_id]
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            if not isclose(expected_sg_curt[gen_id], 0.00, abs_tol=VIOLATION_TOLERANCE):
+                sheet.cell(row=row_idx, column=8).fill = violation_fill
+            row_idx = row_idx + 1
+
+            # Apparent Power Net
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = gen_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = gen_type
+            sheet.cell(row=row_idx, column=6).value = 'Sg_net, [MVA]'
+            sheet.cell(row=row_idx, column=7).value = 'Expected'
+            sheet.cell(row=row_idx, column=8).value = expected_sg_net[gen_id]
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            row_idx = row_idx + 1
+
+    return row_idx
+
+
+def _write_network_branch_results_to_excel(operational_planning, workbook, t, results, result_type):
+
+    sheet_name = str()
+    if result_type == 'losses':
+        sheet_name = 'Branch Losses'
+    elif result_type == 'ratio':
+        sheet_name = 'Transformer Ratio'
+
+    sheet = workbook.create_sheet(sheet_name)
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Branch ID'
+    sheet.cell(row=row_idx, column=4).value = 'From Node ID'
+    sheet.cell(row=row_idx, column=5).value = 'To Node ID'
+    sheet.cell(row=row_idx, column=6).value = 'Quantity'
+    sheet.cell(row=row_idx, column=7).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=8).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    transmission_network = operational_planning.transmission_network
+    row_idx = _write_network_branch_results_per_operator(transmission_network, sheet, 'TSO', row_idx, results['tso'], result_type)
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        row_idx = _write_network_branch_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, result_type, tn_node_id=tn_node_id)
+
+
+def _write_network_branch_results_per_operator(network, sheet, operator_type, row_idx, results, result_type, tn_node_id='-'):
+
+    decimal_style = '0.00'
+
+    aux_string = str()
+    if result_type == 'losses':
+        aux_string = 'P, [MW]'
+    elif result_type == 'ratio':
+        aux_string = 'Ratio'
+
+    expected_values = dict()
+    for branch in network.branches:
+        expected_values[branch.branch_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for branch in network.branches:
+
+            branch_id = branch.branch_id
+
+            if not(result_type == 'ratio' and not branch.is_transformer):
+
+                value = results['scenarios'][s_o]['branches'][result_type][branch_id]
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = branch.branch_id
+                sheet.cell(row=row_idx, column=4).value = branch.fbus
+                sheet.cell(row=row_idx, column=5).value = branch.tbus
+                sheet.cell(row=row_idx, column=6).value = aux_string
+                sheet.cell(row=row_idx, column=7).value = s_o
+                sheet.cell(row=row_idx, column=8).value = value
+                sheet.cell(row=row_idx, column=8).number_format = decimal_style
+                expected_values[branch_id] += value * omega_s
+                row_idx = row_idx + 1
+
+    for branch in network.branches:
+
+        branch_id = branch.branch_id
+
+        if not (result_type == 'ratio' and not branch.is_transformer):
+
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.fbus
+            sheet.cell(row=row_idx, column=5).value = branch.tbus
+            sheet.cell(row=row_idx, column=6).value = aux_string
+            sheet.cell(row=row_idx, column=7).value = 'Expected'
+            sheet.cell(row=row_idx, column=8).value = expected_values[branch_id]
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            row_idx = row_idx + 1
+
+    return row_idx
+
+
+def _write_network_branch_loading_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Branch Loading')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Branch ID'
+    sheet.cell(row=row_idx, column=4).value = 'From Node ID'
+    sheet.cell(row=row_idx, column=5).value = 'To Node ID'
+    sheet.cell(row=row_idx, column=6).value = 'Quantity'
+    sheet.cell(row=row_idx, column=7).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=8).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    transmission_network = operational_planning.transmission_network
+    row_idx = _write_network_branch_loading_results_per_operator(transmission_network, sheet, 'TSO', row_idx, results['tso'])
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        row_idx = _write_network_branch_loading_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_network_branch_loading_results_per_operator(network, sheet, operator_type, row_idx, results, tn_node_id='-'):
+
+    perc_style = '0.00%'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    expected_values = {'flow_ij': {}}
+    for branch in network.branches:
+        expected_values['flow_ij'][branch.branch_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for branch in network.branches:
+
+            value = results['scenarios'][s_o]['branches']['branch_flow']['flow_ij_perc'][branch.branch_id]
+
+            # flow ij, [%]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.fbus
+            sheet.cell(row=row_idx, column=5).value = branch.tbus
+            sheet.cell(row=row_idx, column=6).value = 'Flow_ij, [%]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = value
+            sheet.cell(row=row_idx, column=8).number_format = perc_style
+            if value > 1.00 + VIOLATION_TOLERANCE:
+                sheet.cell(row=row_idx, column=8).fill = violation_fill
+            expected_values['flow_ij'][branch.branch_id] += value * omega_s
+            row_idx = row_idx + 1
+
+    for branch in network.branches:
+
+        value = expected_values['flow_ij'][branch.branch_id]
+
+        # flow ij, [%]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.fbus
+        sheet.cell(row=row_idx, column=5).value = branch.tbus
+        sheet.cell(row=row_idx, column=6).value = 'Flow_ij, [%]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = value
+        sheet.cell(row=row_idx, column=8).number_format = perc_style
+        if value > 1.00 + VIOLATION_TOLERANCE:
+            sheet.cell(row=row_idx, column=8).fill = violation_fill
+        row_idx = row_idx + 1
+
+    return row_idx
+
+
+def _write_network_branch_power_flow_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Power Flows')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Branch ID'
+    sheet.cell(row=row_idx, column=4).value = 'From Node ID'
+    sheet.cell(row=row_idx, column=5).value = 'To Node ID'
+    sheet.cell(row=row_idx, column=6).value = 'Quantity'
+    sheet.cell(row=row_idx, column=7).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=8).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    transmission_network = operational_planning.transmission_network
+    row_idx = _write_network_power_flow_results_per_operator(transmission_network, sheet, 'TSO', row_idx, results['tso'])
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        row_idx = _write_network_power_flow_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_network_power_flow_results_per_operator(network, sheet, operator_type, row_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+    perc_style = '0.00%'
+
+    expected_values = {'pij': {}, 'pji': {}, 'qij': {}, 'qji': {}, 'sij': {}, 'sji': {}}
+    for branch in network.branches:
+        expected_values['pij'][branch.branch_id] = 0.00
+        expected_values['pji'][branch.branch_id] = 0.00
+        expected_values['qij'][branch.branch_id] = 0.00
+        expected_values['qji'][branch.branch_id] = 0.00
+        expected_values['sij'][branch.branch_id] = 0.00
+        expected_values['sji'][branch.branch_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for branch in network.branches:
+
+            branch_id = branch.branch_id
+            rating = branch.rate
+            if rating == 0.0:
+                rating = BRANCH_UNKNOWN_RATING
+
+            pij = results['scenarios'][s_o]['branches']['power_flow']['pij'][branch_id]
+            pji = results['scenarios'][s_o]['branches']['power_flow']['pji'][branch_id]
+            qij = results['scenarios'][s_o]['branches']['power_flow']['qij'][branch_id]
+            qji = results['scenarios'][s_o]['branches']['power_flow']['qji'][branch_id]
+            sij = results['scenarios'][s_o]['branches']['power_flow']['sij'][branch_id]
+            sji = results['scenarios'][s_o]['branches']['power_flow']['sji'][branch_id]
+
+            # Pij, [MW]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.fbus
+            sheet.cell(row=row_idx, column=5).value = branch.tbus
+            sheet.cell(row=row_idx, column=6).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = pij
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_values['pij'][branch_id] += pij * omega_s
+            row_idx = row_idx + 1
+
+            # Pji, [MW]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.tbus
+            sheet.cell(row=row_idx, column=5).value = branch.fbus
+            sheet.cell(row=row_idx, column=6).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = pji
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_values['pji'][branch_id] += pji * omega_s
+            row_idx = row_idx + 1
+
+            # Qij, [MVAr]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.fbus
+            sheet.cell(row=row_idx, column=5).value = branch.tbus
+            sheet.cell(row=row_idx, column=6).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = qij
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_values['qij'][branch_id] += qij * omega_s
+            row_idx = row_idx + 1
+
+            # Qji, [MW]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.tbus
+            sheet.cell(row=row_idx, column=5).value = branch.fbus
+            sheet.cell(row=row_idx, column=6).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = qji
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_values['qji'][branch_id] += qji * omega_s
+            row_idx = row_idx + 1
+
+            # Sij, [MVA]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.fbus
+            sheet.cell(row=row_idx, column=5).value = branch.tbus
+            sheet.cell(row=row_idx, column=6).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = sij
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_values['sij'][branch_id] += sij * omega_s
+            row_idx = row_idx + 1
+
+            # Sij, [%]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.fbus
+            sheet.cell(row=row_idx, column=5).value = branch.tbus
+            sheet.cell(row=row_idx, column=6).value = 'S, [%]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = sij / rating
+            sheet.cell(row=row_idx, column=8).number_format = perc_style
+            row_idx = row_idx + 1
+
+            # Sji, [MW]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.tbus
+            sheet.cell(row=row_idx, column=5).value = branch.fbus
+            sheet.cell(row=row_idx, column=6).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = sji
+            sheet.cell(row=row_idx, column=8).number_format = decimal_style
+            expected_values['sji'][branch_id] += sji * omega_s
+            row_idx = row_idx + 1
+
+            # Sji, [%]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = branch.branch_id
+            sheet.cell(row=row_idx, column=4).value = branch.tbus
+            sheet.cell(row=row_idx, column=5).value = branch.fbus
+            sheet.cell(row=row_idx, column=6).value = 'S, [%]'
+            sheet.cell(row=row_idx, column=7).value = s_o
+            sheet.cell(row=row_idx, column=8).value = sji / rating
+            sheet.cell(row=row_idx, column=8).number_format = perc_style
+            row_idx = row_idx + 1
+
+    for branch in network.branches:
+
+        branch_id = branch.branch_id
+        rating = branch.rate
+        if rating == 0.0:
+            rating = BRANCH_UNKNOWN_RATING
+
+        # Pij, [MW]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.fbus
+        sheet.cell(row=row_idx, column=5).value = branch.tbus
+        sheet.cell(row=row_idx, column=6).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = expected_values['pij'][branch_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Pji, [MW]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.tbus
+        sheet.cell(row=row_idx, column=5).value = branch.fbus
+        sheet.cell(row=row_idx, column=6).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = expected_values['pji'][branch_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Qij, [MVAr]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.fbus
+        sheet.cell(row=row_idx, column=5).value = branch.tbus
+        sheet.cell(row=row_idx, column=6).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = expected_values['qij'][branch_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Qji, [MVAr]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.tbus
+        sheet.cell(row=row_idx, column=5).value = branch.fbus
+        sheet.cell(row=row_idx, column=6).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = expected_values['qji'][branch_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Sij, [MVA]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.fbus
+        sheet.cell(row=row_idx, column=5).value = branch.tbus
+        sheet.cell(row=row_idx, column=6).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = expected_values['sij'][branch_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Sij, [%]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.fbus
+        sheet.cell(row=row_idx, column=5).value = branch.tbus
+        sheet.cell(row=row_idx, column=6).value = 'S, [%]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = abs(expected_values['sij'][branch_id]) / rating
+        sheet.cell(row=row_idx, column=8).number_format = perc_style
+        row_idx = row_idx + 1
+
+        # Sji, [MVA]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.tbus
+        sheet.cell(row=row_idx, column=5).value = branch.fbus
+        sheet.cell(row=row_idx, column=6).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = expected_values['sji'][branch_id]
+        sheet.cell(row=row_idx, column=8).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # Sji, [%]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = branch.branch_id
+        sheet.cell(row=row_idx, column=4).value = branch.tbus
+        sheet.cell(row=row_idx, column=5).value = branch.fbus
+        sheet.cell(row=row_idx, column=6).value = 'S, [%]'
+        sheet.cell(row=row_idx, column=7).value = 'Expected'
+        sheet.cell(row=row_idx, column=8).value = abs(expected_values['sji'][branch_id]) / rating
+        sheet.cell(row=row_idx, column=8).number_format = perc_style
+        row_idx = row_idx + 1
+
+    return row_idx
+
+
+def _write_network_energy_storages_results_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Energy Storage')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'ESS ID'
+    sheet.cell(row=row_idx, column=4).value = 'Node ID'
+    sheet.cell(row=row_idx, column=5).value = 'Quantity'
+    sheet.cell(row=row_idx, column=6).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=7).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    tso_results = results['tso']
+    transmission_network = operational_planning.transmission_network
+    if operational_planning.transmission_network.params.es_reg:
+        row_idx = _write_network_energy_storages_results_per_operator(transmission_network, sheet, 'TSO', row_idx, tso_results)
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        if operational_planning.distribution_networks[tn_node_id].params.es_reg:
+            row_idx = _write_network_energy_storages_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_network_energy_storages_results_per_operator(network, sheet, operator_type, row_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+    percent_style = '0.00%'
+
+    expected_p = dict()
+    expected_q = dict()
+    expected_s = dict()
+    expected_soc = dict()
+    expected_soc_percent = dict()
+    for energy_storage in network.energy_storages:
+        es_id = energy_storage.es_id
+        expected_p[es_id] = 0.00
+        expected_q[es_id] = 0.00
+        expected_s[es_id] = 0.00
+        expected_soc[es_id] = 0.00
+        expected_soc_percent[es_id] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for energy_storage in network.energy_storages:
+
+            es_id = energy_storage.es_id
+            node_id = energy_storage.bus
+            ess_p = results['scenarios'][s_o]['energy_storages']['p'][es_id]
+            ess_q = results['scenarios'][s_o]['energy_storages']['q'][es_id]
+            ess_s = results['scenarios'][s_o]['energy_storages']['s'][es_id]
+            ess_soc = results['scenarios'][s_o]['energy_storages']['soc'][es_id]
+            ess_soc_percent = results['scenarios'][s_o]['energy_storages']['soc_percent'][es_id]
+
+            # - Active Power
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = es_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = 'P, [MW]'
+            sheet.cell(row=row_idx, column=6).value = s_o
+            sheet.cell(row=row_idx, column=7).value = ess_p
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            expected_p[es_id] += ess_p * omega_s
+            row_idx = row_idx + 1
+
+            # - Reactive Power
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = es_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = 'Q, [MVAr]'
+            sheet.cell(row=row_idx, column=6).value = s_o
+            sheet.cell(row=row_idx, column=7).value = ess_q
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            expected_q[es_id] += ess_q * omega_s
+            row_idx = row_idx + 1
+
+            # - Apparent Power
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = es_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = 'S, [MVA]'
+            sheet.cell(row=row_idx, column=6).value = s_o
+            sheet.cell(row=row_idx, column=7).value = ess_s
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            expected_s[es_id] += ess_s  * omega_s
+            row_idx = row_idx + 1
+
+            # State-of-Charge, [MWh]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = es_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = 'SoC, [MWh]'
+            sheet.cell(row=row_idx, column=6).value = s_o
+            sheet.cell(row=row_idx, column=7).value = ess_soc
+            sheet.cell(row=row_idx, column=7).number_format = decimal_style
+            if ess_soc != 'N/A':
+                expected_soc[es_id] += ess_soc * omega_s
+            else:
+                expected_soc[es_id] = ess_soc
+            row_idx = row_idx + 1
+
+            # State-of-Charge, [%]
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = es_id
+            sheet.cell(row=row_idx, column=4).value = node_id
+            sheet.cell(row=row_idx, column=5).value = 'SoC, [%]'
+            sheet.cell(row=row_idx, column=6).value = s_o
+            sheet.cell(row=row_idx, column=7).value = ess_soc_percent
+            sheet.cell(row=row_idx, column=7).number_format = percent_style
+            if ess_soc_percent != 'N/A':
+                expected_soc_percent[es_id] += ess_soc_percent * omega_s
+            else:
+                expected_soc_percent[es_id] = ess_soc_percent
+            row_idx = row_idx + 1
+
+    for energy_storage in network.energy_storages:
+
+        es_id = energy_storage.es_id
+        node_id = energy_storage.bus
+
+        # - Active Power
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = es_id
+        sheet.cell(row=row_idx, column=4).value = node_id
+        sheet.cell(row=row_idx, column=5).value = 'P, [MW]'
+        sheet.cell(row=row_idx, column=6).value = 'Expected'
+        sheet.cell(row=row_idx, column=7).value = expected_p[es_id]
+        sheet.cell(row=row_idx, column=7).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # - Reactive Power
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = es_id
+        sheet.cell(row=row_idx, column=4).value = node_id
+        sheet.cell(row=row_idx, column=5).value = 'Q, [MVAr]'
+        sheet.cell(row=row_idx, column=6).value = 'Expected'
+        sheet.cell(row=row_idx, column=7).value = expected_q[es_id]
+        sheet.cell(row=row_idx, column=7).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # - Apparent Power
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = es_id
+        sheet.cell(row=row_idx, column=4).value = node_id
+        sheet.cell(row=row_idx, column=5).value = 'S, [MVA]'
+        sheet.cell(row=row_idx, column=6).value = 'Expected'
+        sheet.cell(row=row_idx, column=7).value = expected_s[es_id]
+        sheet.cell(row=row_idx, column=7).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # State-of-Charge, [MWh]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = es_id
+        sheet.cell(row=row_idx, column=4).value = node_id
+        sheet.cell(row=row_idx, column=5).value = 'SoC, [MWh]'
+        sheet.cell(row=row_idx, column=6).value = 'Expected'
+        sheet.cell(row=row_idx, column=7).value = expected_soc[es_id]
+        sheet.cell(row=row_idx, column=7).number_format = decimal_style
+        row_idx = row_idx + 1
+
+        # State-of-Charge, [%]
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = es_id
+        sheet.cell(row=row_idx, column=4).value = node_id
+        sheet.cell(row=row_idx, column=5).value = 'SoC, [%]'
+        sheet.cell(row=row_idx, column=6).value = 'Expected'
+        sheet.cell(row=row_idx, column=7).value = expected_soc_percent[es_id]
+        sheet.cell(row=row_idx, column=7).number_format = percent_style
+        row_idx = row_idx + 1
+
+    return row_idx
+
+
+def _write_relaxation_slacks_results_to_excel(operational_planning, workbook, t, results):
+    _write_relaxation_slacks_results_network_operators_to_excel(operational_planning, workbook, t, results)
+
+
+def _write_relaxation_slacks_results_network_operators_to_excel(operational_planning, workbook, t, results):
+
+    sheet = workbook.create_sheet('Relaxation Slacks TSO, DSOs')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Resource ID'
+    sheet.cell(row=row_idx, column=4).value = 'Quantity'
+    sheet.cell(row=row_idx, column=5).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=6).value = t
+    row_idx = row_idx + 1
+
+    # Write results -- TSO
+    tso_results = results['tso']
+    transmission_network = operational_planning.transmission_network
+    tn_params = operational_planning.transmission_network.params
+    if tn_params.slacks:
+        row_idx = _write_relaxation_slacks_results_per_operator(transmission_network, sheet, 'TSO', row_idx, tso_results)
+
+    # Write results -- DSOs
+    for tn_node_id in results['dso']:
+        dso_results = results['dso'][tn_node_id]
+        distribution_network = operational_planning.distribution_networks[tn_node_id]
+        if distribution_network.params.slacks:
+            row_idx = _write_relaxation_slacks_results_per_operator(distribution_network, sheet, 'DSO', row_idx, dso_results, tn_node_id=tn_node_id)
+
+
+def _write_relaxation_slacks_results_per_operator(network, sheet, operator_type, row_idx, results, tn_node_id='-'):
+
+    decimal_style = '0.00'
+    params = network.params
+
+    for s_o in results['scenarios']:
+
+        # Voltage slacks
+        if params.slacks.grid_operation.voltage:
+
+            for node in network.nodes:
+
+                node_id = node.bus_i
+                slack_e = results['scenarios'][s_o]['relaxation_slacks']['voltage']['e'][node_id]
+                slack_f = results['scenarios'][s_o]['relaxation_slacks']['voltage']['f'][node_id]
+
+                # - e
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Voltage, e'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = slack_e
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+                # - f
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Voltage, f'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = slack_f
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # Branch flow slacks
+        if params.slacks.grid_operation.branch_flow:
+
+            for branch in network.branches:
+
+                branch_id = branch.branch_id
+                iij_sqr = results['scenarios'][s_o]['relaxation_slacks']['branch_flow']['flow_ij_sqr'][branch_id]
+
+                # - flow_ij
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = branch_id
+                sheet.cell(row=row_idx, column=4).value = 'Flow_ij_sqr'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = iij_sqr
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # Node balance
+        if params.slacks.node_balance:
+
+            for node in network.nodes:
+
+                node_id = node.bus_i
+                slack_node_balance_p = results['scenarios'][s_o]['relaxation_slacks']['node_balance']['p'][node_id]
+                slack_node_balance_q = results['scenarios'][s_o]['relaxation_slacks']['node_balance']['q'][node_id]
+
+                # - p
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Node balance, p'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = slack_node_balance_p
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+                # - q
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Node balance, q'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = slack_node_balance_q
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # Shared ESS
+        for shared_energy_storage in network.shared_energy_storages:
+
+            node_id = shared_energy_storage.bus
+
+            # - Complementarity
+            if params.slacks.shared_ess.complementarity:
+
+                comp = results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['comp'][node_id]
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Shared Energy Storage, comp'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = comp
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+            # - Charging
+            if params.slacks.shared_ess.charging:
+
+                sch_up = results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['sch_up'][node_id]
+                sch_down = results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['sch_down'][node_id]
+                sdch_up = results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['sdch_up'][node_id]
+                sdch_down = results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['sdch_down'][node_id]
+
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Shared Energy Storage, sch_up'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = sch_up
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Shared Energy Storage, sch_down'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = sch_down
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Shared Energy Storage, sdch_up'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = sdch_up
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+                sheet.cell(row=row_idx, column=1).value = operator_type
+                sheet.cell(row=row_idx, column=2).value = tn_node_id
+                sheet.cell(row=row_idx, column=3).value = node_id
+                sheet.cell(row=row_idx, column=4).value = 'Shared Energy Storage, sdch_down'
+                sheet.cell(row=row_idx, column=5).value = s_o
+                sheet.cell(row=row_idx, column=6).value = sdch_down
+                sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                row_idx = row_idx + 1
+
+        # ESS
+        if params.es_reg:
+
+            for energy_storage in network.energy_storages:
+
+                es_id = energy_storage.es_id
+
+                # - Complementarity
+                if params.slacks.ess.complementarity:
+
+                    comp = results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['comp'][es_id]
+
+                    sheet.cell(row=row_idx, column=1).value = operator_type
+                    sheet.cell(row=row_idx, column=2).value = tn_node_id
+                    sheet.cell(row=row_idx, column=3).value = es_id
+                    sheet.cell(row=row_idx, column=4).value = 'Energy Storage, comp'
+                    sheet.cell(row=row_idx, column=5).value = s_o
+                    sheet.cell(row=row_idx, column=6).value = comp
+                    sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                    row_idx = row_idx + 1
+
+                # - Charging
+                if params.slacks.ess.charging:
+
+                    sch_up = results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['sch_up'][es_id]
+                    sch_down = results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['sch_down'][es_id]
+                    sdch_up = results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['sch_up'][es_id]
+                    sdch_down = results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['sdch_down'][es_id]
+
+                    sheet.cell(row=row_idx, column=1).value = operator_type
+                    sheet.cell(row=row_idx, column=2).value = tn_node_id
+                    sheet.cell(row=row_idx, column=3).value = es_id
+                    sheet.cell(row=row_idx, column=4).value = 'Energy Storage, sch_up'
+                    sheet.cell(row=row_idx, column=5).value = s_o
+                    sheet.cell(row=row_idx, column=6).value = sch_up
+                    sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                    row_idx = row_idx + 1
+
+                    sheet.cell(row=row_idx, column=1).value = operator_type
+                    sheet.cell(row=row_idx, column=2).value = tn_node_id
+                    sheet.cell(row=row_idx, column=3).value = es_id
+                    sheet.cell(row=row_idx, column=4).value = 'Energy Storage, sch_down'
+                    sheet.cell(row=row_idx, column=5).value = s_o
+                    sheet.cell(row=row_idx, column=6).value = sch_down
+                    sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                    row_idx = row_idx + 1
+
+                    sheet.cell(row=row_idx, column=1).value = operator_type
+                    sheet.cell(row=row_idx, column=2).value = tn_node_id
+                    sheet.cell(row=row_idx, column=3).value = es_id
+                    sheet.cell(row=row_idx, column=4).value = 'Energy Storage, sdch_up'
+                    sheet.cell(row=row_idx, column=5).value = s_o
+                    sheet.cell(row=row_idx, column=6).value = sdch_up
+                    sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                    row_idx = row_idx + 1
+
+                    sheet.cell(row=row_idx, column=1).value = operator_type
+                    sheet.cell(row=row_idx, column=2).value = tn_node_id
+                    sheet.cell(row=row_idx, column=3).value = es_id
+                    sheet.cell(row=row_idx, column=4).value = 'Energy Storage, sdch_down'
+                    sheet.cell(row=row_idx, column=5).value = s_o
+                    sheet.cell(row=row_idx, column=6).value = sdch_down
+                    sheet.cell(row=row_idx, column=6).number_format = decimal_style
+                    row_idx = row_idx + 1
+
+    return row_idx
+
+
 
 
 # ======================================================================================================================

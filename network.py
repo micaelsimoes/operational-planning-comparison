@@ -193,8 +193,14 @@ class Network:
     def get_primal_value(self, model):
         return pe.value(model.objective)
 
-    def process_results(self, model, results=dict()):
-        return _process_results(self, model, results=results)
+    def process_results(self, model, t, results=dict()):
+        return _process_results(self, model, results=results, t=t)
+
+    def process_results_interface(self, model):
+        return _process_results_interface(self, model)
+
+    def process_results_summary_detail(self, model, t):
+        return _process_results_summary_detail(self, model, t)
 
     def compute_series_admittance(self):
         for branch in self.branches:
@@ -850,12 +856,9 @@ def _build_model(network, t):
             # Demand side flexibility
             if params.fl_reg:
                 for c in model.loads:
-                    flex_p_up = model.flex_p_up[c, s_o]
-                    flex_p_down = model.flex_p_down[c, s_o]
-                    flex_q_up = model.flex_q_up[c, s_o]
-                    flex_q_down = model.flex_q_down[c, s_o]
-                    obj_scenario += c_flex[t] * network.baseMVA * (flex_p_down + flex_p_up)
-                    obj_scenario += c_flex[t] * network.baseMVA * (flex_q_down + flex_q_up)
+                    pc_flex = (model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
+                    qc_flex =  (model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
+                    obj_scenario += c_flex[t] * network.baseMVA * (pc_flex + qc_flex)
 
             # Load curtailment
             if params.l_curt:
@@ -904,12 +907,9 @@ def _build_model(network, t):
             # Demand side flexibility
             if params.fl_reg:
                 for c in model.loads:
-                    flex_p_up = model.flex_p_up[c, s_o]
-                    flex_p_down = model.flex_p_down[c, s_o]
-                    flex_q_up = model.flex_q_up[c, s_o]
-                    flex_q_down = model.flex_q_down[c, s_o]
-                    obj_scenario += model.penalty_flex_usage * network.baseMVA * (flex_p_down + flex_p_up)
-                    obj_scenario += model.penalty_flex_usage * network.baseMVA * (flex_q_down + flex_q_up)
+                    pc_flex = (model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
+                    qc_flex = (model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
+                    obj_scenario += model.penalty_flex_usage * network.baseMVA * (pc_flex + qc_flex)
 
             # ESS utilization
             if params.es_reg:
@@ -1621,22 +1621,21 @@ def _get_generation_from_data(data, gen_id, idx_scenario, type):
 # ======================================================================================================================
 #   NETWORK RESULTS functions
 # ======================================================================================================================
-def _process_results(network, model, results=dict(), n=0):
+def _process_results(network, model, results=dict(), t=0):
 
-    params = network.params
     s_base = network.baseMVA
 
     processed_results = dict()
-    processed_results['obj'] = _compute_objective_function_value(network, model, params)
-    processed_results['gen_cost'] = _compute_generation_cost(network, model)
-    processed_results['total_load'] = _compute_total_load(network, model, params)
-    processed_results['total_gen'] = _compute_total_generation(network, model, params)
+    processed_results['obj'] = _compute_objective_function_value(network, model, t=t)
+    processed_results['gen_cost'] = _compute_generation_cost(network, model, t=t)
+    processed_results['total_load'] = _compute_total_load(network, model)
+    processed_results['total_gen'] = _compute_total_generation(network, model)
     processed_results['total_conventional_gen'] = _compute_conventional_generation(network, model)
-    processed_results['total_renewable_gen'] = _compute_renewable_generation(network, model, params)
-    processed_results['losses'] = _compute_losses(network, model, params)
-    processed_results['gen_curt'] = _compute_generation_curtailment(network, model, params)
-    processed_results['load_curt'] = _compute_load_curtailment(network, model, params)
-    processed_results['flex_used'] = _compute_flexibility_used(network, model, params)
+    processed_results['total_renewable_gen'] = _compute_renewable_generation(network, model)
+    processed_results['losses'] = _compute_losses(network, model)
+    processed_results['gen_curt'] = _compute_generation_curtailment(network, model)
+    processed_results['load_curt'] = _compute_load_curtailment(network, model)
+    processed_results['flex_used'] = _compute_flexibility_used(network, model)
     if results:
         processed_results['runtime'] = float(_get_info_from_results(results, 'Time:').strip()),
 
@@ -1653,24 +1652,24 @@ def _process_results(network, model, results=dict(), n=0):
             'shared_energy_storages': {'p': {}, 'q': {}, 's': {}, 'soc': {}, 'soc_percent': {}}
         }
 
-        if params.transf_reg:
+        if network.params.transf_reg:
             processed_results['scenarios'][s_o]['branches']['ratio'] = dict()
 
-        if params.fl_reg:
+        if network.params.fl_reg:
             processed_results['scenarios'][s_o]['consumption']['pc_flex'] = dict()
             processed_results['scenarios'][s_o]['consumption']['qc_flex'] = dict()
 
-        if params.l_curt:
+        if network.params.l_curt:
             processed_results['scenarios'][s_o]['consumption']['pc_curt'] = dict()
             processed_results['scenarios'][s_o]['consumption']['qc_curt'] = dict()
 
-        if params.rg_curt:
+        if network.params.rg_curt:
             processed_results['scenarios'][s_o]['generation']['pg_net'] = dict()
             processed_results['scenarios'][s_o]['generation']['qg_net'] = dict()
             processed_results['scenarios'][s_o]['generation']['sg_net'] = dict()
             processed_results['scenarios'][s_o]['generation']['sg_curt'] = dict()
 
-        if params.es_reg:
+        if network.params.es_reg:
             processed_results['scenarios'][s_o]['energy_storages']['p'] = dict()
             processed_results['scenarios'][s_o]['energy_storages']['q'] = dict()
             processed_results['scenarios'][s_o]['energy_storages']['s'] = dict()
@@ -1679,24 +1678,24 @@ def _process_results(network, model, results=dict(), n=0):
 
         processed_results['scenarios'][s_o]['relaxation_slacks'] = dict()
         processed_results['scenarios'][s_o]['relaxation_slacks']['voltage'] = dict()
-        if params.slacks.grid_operation.voltage:
+        if network.params.slacks.grid_operation.voltage:
             processed_results['scenarios'][s_o]['relaxation_slacks']['voltage']['e'] = dict()
             processed_results['scenarios'][s_o]['relaxation_slacks']['voltage']['f'] = dict()
         processed_results['scenarios'][s_o]['relaxation_slacks']['branch_flow'] = dict()
-        if params.slacks.grid_operation.branch_flow:
+        if network.params.slacks.grid_operation.branch_flow:
             processed_results['scenarios'][s_o]['relaxation_slacks']['branch_flow']['flow_ij_sqr'] = dict()
         processed_results['scenarios'][s_o]['relaxation_slacks']['node_balance'] = dict()
-        if params.slacks.node_balance:
+        if network.params.slacks.node_balance:
             processed_results['scenarios'][s_o]['relaxation_slacks']['node_balance']['p'] = dict()
             processed_results['scenarios'][s_o]['relaxation_slacks']['node_balance']['q'] = dict()
         processed_results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages'] = dict()
-        if params.slacks.shared_ess.complementarity:
+        if network.params.slacks.shared_ess.complementarity:
             processed_results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['comp'] = dict()
-        if params.fl_reg:
+        if network.params.fl_reg:
             processed_results['scenarios'][s_o]['relaxation_slacks']['flexibility'] = dict()
-        if params.es_reg:
+        if network.params.es_reg:
             processed_results['scenarios'][s_o]['relaxation_slacks']['energy_storages'] = dict()
-            if params.slacks.ess.complementarity:
+            if network.params.slacks.ess.complementarity:
                 processed_results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['comp'] = dict()
 
         # Voltage
@@ -1720,14 +1719,14 @@ def _process_results(network, model, results=dict(), n=0):
             processed_results['scenarios'][s_o]['consumption']['qc'][load_id] = qc
             processed_results['scenarios'][s_o]['consumption']['pc_net'][load_id] += pc
             processed_results['scenarios'][s_o]['consumption']['qc_net'][load_id] += qc
-            if params.fl_reg:
+            if network.params.fl_reg:
                 pc_flex = pe.value(model.flex_p_up[c, s_o] - model.flex_p_down[c, s_o]) * network.baseMVA
                 qc_flex = pe.value(model.flex_q_up[c, s_o] - model.flex_q_down[c, s_o]) * network.baseMVA
                 processed_results['scenarios'][s_o]['consumption']['pc_flex'][load_id] = pc_flex
                 processed_results['scenarios'][s_o]['consumption']['pc_net'][load_id] += pc_flex
                 processed_results['scenarios'][s_o]['consumption']['pc_flex'][load_id] = qc_flex
                 processed_results['scenarios'][s_o]['consumption']['qc_net'][load_id] += qc_flex
-            if params.l_curt:
+            if network.params.l_curt:
                 pc_curt = pe.value(model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o]) * network.baseMVA
                 qc_curt = pe.value(model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o]) * network.baseMVA
                 processed_results['scenarios'][s_o]['consumption']['pc_curt'][load_id] = pc_curt
@@ -1739,14 +1738,14 @@ def _process_results(network, model, results=dict(), n=0):
         for g in model.generators:
             generator = network.generators[g]
             gen_id = generator.gen_id
-            if params.rg_curt:
+            if network.params.rg_curt:
                 processed_results['scenarios'][s_o]['generation']['pg_net'][gen_id] = 0.00
                 processed_results['scenarios'][s_o]['generation']['qg_net'][gen_id] = 0.00
                 processed_results['scenarios'][s_o]['generation']['sg_net'][gen_id] = 0.00
                 processed_results['scenarios'][s_o]['generation']['sg_curt'][gen_id] = 0.00
-            if generator.is_curtaillable() and params.rg_curt:
-                pg = generator.pg[s_o][n] * network.baseMVA
-                qg = generator.qg[s_o][n] * network.baseMVA
+            if generator.is_curtaillable() and network.params.rg_curt:
+                pg = generator.pg[s_o][t] * network.baseMVA
+                qg = generator.qg[s_o][t] * network.baseMVA
                 sg = sqrt(pg ** 2 + qg ** 2)
                 pg_net = pe.value(model.pg[g, s_o]) * network.baseMVA
                 qg_net = pe.value(model.qg[g, s_o]) * network.baseMVA
@@ -1774,8 +1773,8 @@ def _process_results(network, model, results=dict(), n=0):
                 rating = BRANCH_UNKNOWN_RATING
 
             # Power flows
-            pij, qij = _get_branch_power_flow(network, params, branch, branch.fbus, branch.tbus, model, s_o)
-            pji, qji = _get_branch_power_flow(network, params, branch, branch.tbus, branch.fbus, model, s_o)
+            pij, qij = _get_branch_power_flow(network, branch, branch.fbus, branch.tbus, model, s_o)
+            pji, qji = _get_branch_power_flow(network, branch, branch.tbus, branch.fbus, model, s_o)
             sij_sqr = pij**2 + qij**2
             sji_sqr = pji**2 + qji**2
             processed_results['scenarios'][s_o]['branches']['power_flow']['pij'][branch_id] = pij
@@ -1786,7 +1785,7 @@ def _process_results(network, model, results=dict(), n=0):
             processed_results['scenarios'][s_o]['branches']['power_flow']['sji'][branch_id] = sqrt(sji_sqr)
 
             # Losses (active power)
-            p_losses = _get_branch_power_losses(network, params, model, k, s_o)
+            p_losses = _get_branch_power_losses(network, model, k, s_o)
             processed_results['scenarios'][s_o]['branches']['losses'][branch_id] = p_losses
 
             # Ratio
@@ -1799,7 +1798,7 @@ def _process_results(network, model, results=dict(), n=0):
             processed_results['scenarios'][s_o]['branches']['branch_flow']['flow_ij_perc'][branch_id] = flow_ij_perc
 
         # Energy Storage devices
-        if params.es_reg:
+        if network.params.es_reg:
             for e in model.energy_storages:
                 es_id = network.energy_storages[e].es_id
                 capacity = network.energy_storages[e].e * network.baseMVA
@@ -1816,7 +1815,7 @@ def _process_results(network, model, results=dict(), n=0):
                 processed_results['scenarios'][s_o]['energy_storages']['soc_percent'][es_id] = soc_ess / capacity
 
         # Flexible loads
-        if params.fl_reg:
+        if network.params.fl_reg:
             for i in model.loads:
                 load_id = network.loads[i].load_id
                 pc_flex = pe.value(model.flex_p_up[i, s_o] - model.flex_p_down[i, s_o]) * network.baseMVA
@@ -1841,7 +1840,7 @@ def _process_results(network, model, results=dict(), n=0):
             processed_results['scenarios'][s_o]['shared_energy_storages']['soc_percent'][node_id] = soc_ess / capacity
 
         # Voltage slacks
-        if params.slacks.grid_operation.voltage:
+        if network.params.slacks.grid_operation.voltage:
             for i in model.nodes:
                 node_id = network.nodes[i].bus_i
                 slack_e = pe.value(model.slack_e[i, s_o])
@@ -1850,7 +1849,7 @@ def _process_results(network, model, results=dict(), n=0):
                 processed_results['scenarios'][s_o]['relaxation_slacks']['voltage']['f'][node_id] = slack_f
 
         # Branch current slacks
-        if params.slacks.grid_operation.branch_flow:
+        if network.params.slacks.grid_operation.branch_flow:
             for b in model.branches:
                 branch_id = network.branches[b].branch_id
                 slack_flow_ij_sqr = pe.value(model.slack_flow_ij_sqr[b, s_o])
@@ -1860,12 +1859,12 @@ def _process_results(network, model, results=dict(), n=0):
         # - Shared ESS
         for e in model.shared_energy_storages:
             node_id = network.shared_energy_storages[e].bus
-            if params.slacks.shared_ess.complementarity:
+            if network.params.slacks.shared_ess.complementarity:
                 slack_comp = pe.value(model.slack_shared_es_comp[e, s_o]) * (s_base ** 2)
                 processed_results['scenarios'][s_o]['relaxation_slacks']['shared_energy_storages']['comp'][node_id] = slack_comp
 
         # - Node balance
-        if params.slacks.node_balance:
+        if network.params.slacks.node_balance:
             for i in model.nodes:
                 node_id = network.nodes[i].bus_i
                 slack_p = pe.value(model.slack_node_balance_p[i, s_o]) * s_base
@@ -1874,21 +1873,87 @@ def _process_results(network, model, results=dict(), n=0):
                 processed_results['scenarios'][s_o]['relaxation_slacks']['node_balance']['q'][node_id] = slack_q
 
         # - ESS slacks
-        if params.es_reg:
+        if network.params.es_reg:
             for e in model.energy_storages:
                 es_id = network.energy_storages[e].es_id
-                if params.slacks.ess.complementarity:
+                if network.params.slacks.ess.complementarity:
                     slack_comp = pe.value(model.slack_es_comp[e, s_o]) * (s_base ** 2)
                     processed_results['scenarios'][s_o]['relaxation_slacks']['energy_storages']['comp'][es_id] = slack_comp
 
     return processed_results
 
 
-def _compute_objective_function_value(network, model, params, t=0):
+def _process_results_interface(network, model):
+
+    results = dict()
+
+    if network.is_transmission:
+        for dn in model.active_distribution_networks:
+
+            node_id = network.active_distribution_network_nodes[dn]
+            node_idx = network.get_node_idx(node_id)
+            load_idx = network.get_adn_load_idx(node_id)
+
+            # Power flow results per market and operation scenario
+            results[node_id] = dict()
+            for s_o in model.scenarios_operation:
+                results[node_id][s_o] = dict()
+                vmag = sqrt(pe.value(model.e_actual[node_idx, s_o] ** 2 + model.f_actual[node_idx, s_o] ** 2))
+                pf_p = pe.value(model.pc[load_idx, s_o]) * network.baseMVA
+                pf_q = pe.value(model.qc[load_idx, s_o]) * network.baseMVA
+                results[node_id][s_o]['v'] = vmag
+                results[node_id][s_o]['p'] = pf_p
+                results[node_id][s_o]['q'] = pf_q
+    else:
+
+        # Power flow results per market and operation scenario
+        ref_node_id = network.get_reference_node_id()
+        ref_node_idx = network.get_node_idx(ref_node_id)
+        ref_gen_idx = network.get_reference_gen_idx()
+        for s_o in model.scenarios_operation:
+            results[s_o] = dict()
+            vmag = pe.value(model.e_actual[ref_node_idx, s_o])
+            pf_p = pe.value(model.pg[ref_gen_idx, s_o]) * network.baseMVA
+            pf_q = pe.value(model.qg[ref_gen_idx, s_o]) * network.baseMVA
+            results[s_o]['v'] = vmag
+            results[s_o]['p'] = pf_p
+            results[s_o]['q'] = pf_q
+
+    return results
+
+
+def _process_results_summary_detail(network, model, t):
+
+    results = dict()
+    results['scenarios'] = dict()
+
+    for s_o in model.scenarios_operation:
+
+        omega_o = network.prob_operation_scenarios[s_o]
+        results['scenarios'][s_o] = dict()
+
+        results['scenarios'][s_o]['probability'] = omega_o
+
+        results['scenarios'][s_o]['obj'] = _compute_objective_function_value_per_scenario(network, model, s_o, t)
+        results['scenarios'][s_o]['load'] = _compute_load_per_scenario(network, model, s_o)
+        results['scenarios'][s_o]['load_curtailed'] = _compute_load_curtailment_per_scenario(network, model, s_o)
+        results['scenarios'][s_o]['flexibility'] = _compute_flexibility_per_scenario(network, model, s_o)
+        results['scenarios'][s_o]['cost_flexibility'] = _compute_cost_flexibility_per_scenario(network, model, s_o, t)
+        results['scenarios'][s_o]['generation'] = _compute_generation_per_scenario(network, model, s_o)
+        results['scenarios'][s_o]['generation_conventional'] = _compute_conventional_generation_per_scenario(network, model, s_o)
+        results['scenarios'][s_o]['generation_conventional_cost'] = _compute_cost_conventional_generation_per_scenario(network, model, s_o, t)
+        results['scenarios'][s_o]['generation_renewable'] = _compute_renewable_generation_per_scenario(network, model, s_o)
+        results['scenarios'][s_o]['generation_renewable_curtailed'] = _compute_renewable_generation_curtailed_per_scenario(network, model, s_o)
+        results['scenarios'][s_o]['losses'] = _compute_losses_per_scenario(network, model, s_o)
+
+    return results
+
+
+def _compute_objective_function_value(network, model, t):
 
     obj = 0.0
 
-    if params.obj_type == OBJ_MIN_COST:
+    if network.params.obj_type == OBJ_MIN_COST:
 
         c_p = network.cost_energy_p
         c_flex = network.cost_flex
@@ -1908,28 +1973,28 @@ def _compute_objective_function_value(network, model, params, t=0):
                     obj_scenario += c_p[t] * network.baseMVA * pg
 
             # Demand side flexibility
-            if params.fl_reg:
+            if network.params.fl_reg:
                 for c in model.loads:
                     flex_p = pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
                     flex_q = pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
                     obj_scenario += c_flex[t] * network.baseMVA * (flex_p + flex_q)
 
             # Load curtailment
-            if params.l_curt:
+            if network.params.l_curt:
                 for c in model.loads:
                     pc_curt = pe.value(model.pc_curt_down[c, s_o] + model.pc_curt_up[c, s_o])
                     qc_curt = pe.value(model.qc_curt_down[c, s_o] + model.qc_curt_up[c, s_o])
                     obj_scenario += cost_load_curt * network.baseMVA * (pc_curt + qc_curt)
 
             # Generation curtailment
-            if params.rg_curt:
+            if network.params.rg_curt:
                 for g in model.generators:
                     sg_curt = pe.value(model.sg_curt[g, s_o])
                     obj_scenario += cost_res_curt * network.baseMVA * sg_curt
 
             obj += obj_scenario * network.prob_operation_scenarios[s_o]
 
-    elif params.obj_type == OBJ_CONGESTION_MANAGEMENT:
+    elif network.params.obj_type == OBJ_CONGESTION_MANAGEMENT:
 
         pen_gen_curtailment = pe.value(model.penalty_gen_curtailment)
         pen_load_curtailment = pe.value(model.penalty_load_curtailment)
@@ -1940,20 +2005,20 @@ def _compute_objective_function_value(network, model, params, t=0):
             obj_scenario = 0.0
 
             # Generation curtailment
-            if params.rg_curt:
+            if network.params.rg_curt:
                 for g in model.generators:
                     sg_curt = pe.value(model.sg_curt[g, s_o])
                     obj_scenario += pen_gen_curtailment * network.baseMVA * sg_curt
 
             # Consumption curtailment
-            if params.l_curt:
+            if network.params.l_curt:
                 for c in model.loads:
                     pc_curt = pe.value(model.pc_curt_down[c, s_o] + model.pc_curt_up[c, s_o])
                     qc_curt = pe.value(model.qc_curt_down[c, s_o] + model.qc_curt_up[c, s_o])
                     obj_scenario += pen_load_curtailment * network.baseMVA * (pc_curt + qc_curt)
 
             # Demand side flexibility
-            if params.fl_reg:
+            if network.params.fl_reg:
                 for c in model.loads:
                     pc_flex = pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
                     qc_flex = pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
@@ -1964,7 +2029,7 @@ def _compute_objective_function_value(network, model, params, t=0):
     return obj
 
 
-def _compute_generation_cost(network, model, n=0):
+def _compute_generation_cost(network, model, t):
 
     gen_cost = 0.0
 
@@ -1974,13 +2039,13 @@ def _compute_generation_cost(network, model, n=0):
         gen_cost_scenario = 0.0
         for g in model.generators:
             if network.generators[g].is_controllable():
-                gen_cost_scenario += c_p[n] * network.baseMVA * pe.value(model.pg[g, s_o])
+                gen_cost_scenario += c_p[t] * network.baseMVA * pe.value(model.pg[g, s_o])
         gen_cost += gen_cost_scenario * network.prob_operation_scenarios[s_o]
 
     return gen_cost
 
 
-def _compute_total_load(network, model, params):
+def _compute_total_load(network, model):
 
     total_load = {'p': 0.00, 'q': 0.00}
 
@@ -1989,7 +2054,10 @@ def _compute_total_load(network, model, params):
         for c in model.loads:
             total_load_scenario['p'] += network.baseMVA * pe.value(model.pc[c, s_o])
             total_load_scenario['q'] += network.baseMVA * pe.value(model.qc[c, s_o])
-            if params.l_curt:
+            if network.params.fl_reg:
+                total_load_scenario['p'] += network.baseMVA * pe.value(model.flex_p_up[c, s_o] - model.flex_p_down[c, s_o])
+                total_load_scenario['q'] += network.baseMVA * pe.value(model.flex_q_up[c, s_o] - model.flex_q_down[c, s_o])
+            if network.params.l_curt:
                 total_load_scenario['p'] -= network.baseMVA * pe.value(model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o])
                 total_load_scenario['q'] -= network.baseMVA * pe.value(model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o])
 
@@ -1999,7 +2067,7 @@ def _compute_total_load(network, model, params):
     return total_load
 
 
-def _compute_total_generation(network, model, params):
+def _compute_total_generation(network, model):
 
     total_gen = {'p': 0.00, 'q': 0.00}
 
@@ -2030,7 +2098,7 @@ def _compute_conventional_generation(network, model):
     return total_gen
 
 
-def _compute_renewable_generation(network, model, params):
+def _compute_renewable_generation(network, model):
 
     total_renewable_gen = {'p': 0.00, 'q': 0.00, 's': 0.00}
 
@@ -2040,7 +2108,7 @@ def _compute_renewable_generation(network, model, params):
             if network.generators[g].is_renewable():
                 total_renewable_gen_scenario['p'] += network.baseMVA * pe.value(model.pg[g, s_o])
                 total_renewable_gen_scenario['q'] += network.baseMVA * pe.value(model.qg[g, s_o])
-                if params.rg_curt:
+                if network.params.rg_curt:
                     total_renewable_gen_scenario['s'] += network.baseMVA * pe.value(model.sg_abs[g, s_o])
         total_renewable_gen['p'] += total_renewable_gen_scenario['p'] * network.prob_operation_scenarios[s_o]
         total_renewable_gen['q'] += total_renewable_gen_scenario['q'] * network.prob_operation_scenarios[s_o]
@@ -2049,21 +2117,21 @@ def _compute_renewable_generation(network, model, params):
     return total_renewable_gen
 
 
-def _compute_losses(network, model, params):
+def _compute_losses(network, model):
     power_losses = 0.0
     for s_o in model.scenarios_operation:
         power_losses_scenario = 0.0
         for k in model.branches:
-            power_losses_scenario += _get_branch_power_losses(network, params, model, k, s_o)
+            power_losses_scenario += _get_branch_power_losses(network, model, k, s_o)
         power_losses += power_losses_scenario * network.prob_operation_scenarios[s_o]
     return power_losses
 
 
-def _compute_generation_curtailment(network, model, params):
+def _compute_generation_curtailment(network, model):
 
     gen_curtailment = {'p': 0.00, 'q': 0.00, 's': 0.00}
 
-    if params.rg_curt:
+    if network.params.rg_curt:
         for s_o in model.scenarios_operation:
             gen_curtailment_scenario = {'p': 0.00, 'q': 0.00, 's': 0.00}
             for g in model.generators:
@@ -2076,11 +2144,11 @@ def _compute_generation_curtailment(network, model, params):
     return gen_curtailment
 
 
-def _compute_load_curtailment(network, model, params):
+def _compute_load_curtailment(network, model):
 
     load_curtailment = {'p': 0.00, 'q': 0.00}
 
-    if params.l_curt:
+    if network.params.l_curt:
         for s_m in model.scenarios_market:
             for s_o in model.scenarios_operation:
                 load_curtailment_scenario = {'p': 0.00, 'q': 0.00}
@@ -2095,11 +2163,11 @@ def _compute_load_curtailment(network, model, params):
     return load_curtailment
 
 
-def _compute_flexibility_used(network, model, params):
+def _compute_flexibility_used(network, model):
 
     flexibility_used = {'p': 0.0, 'q': 0.0}
 
-    if params.fl_reg:
+    if network.params.fl_reg:
         for s_o in model.scenarios_operation:
             flexibility_used_scenario = {'p': 0.0, 'q': 0.0}
             for c in model.loads:
@@ -2110,6 +2178,170 @@ def _compute_flexibility_used(network, model, params):
             flexibility_used['q'] += flexibility_used_scenario['q'] * network.prob_operation_scenarios[s_o]
 
     return flexibility_used
+
+
+def _compute_objective_function_value_per_scenario(network, model, s_o, t):
+
+    params = network.params
+
+    obj = 0.00
+
+    if params.obj_type == OBJ_MIN_COST:
+
+        c_p = network.cost_energy_p
+        c_flex = network.cost_flex
+        cost_res_curt = pe.value(model.cost_res_curtailment)
+        cost_load_curt = pe.value(model.cost_load_curtailment)
+
+        # Generation -- paid at market price
+        for g in model.generators:
+            if network.generators[g].is_controllable():
+                if (not network.is_transmission) and network.generators[g].gen_type == GEN_REFERENCE:
+                    continue
+                pg = pe.value(model.pg[g, s_o])
+                obj += c_p[t] * network.baseMVA * pg
+
+        # Demand side flexibility
+        if params.fl_reg:
+            for c in model.loads:
+                pc_flex = pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
+                qc_flex = pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
+                obj += c_flex[t] * network.baseMVA * (pc_flex + qc_flex)
+
+        # Load curtailment
+        if params.l_curt:
+            for c in model.loads:
+                pc_curt = pe.value(model.pc_curt_down[c, s_o] + model.pc_curt_up[c, s_o])
+                qc_curt = pe.value(model.qc_curt_down[c, s_o] + model.qc_curt_up[c, s_o])
+                obj += cost_load_curt * network.baseMVA * (pc_curt + qc_curt)
+
+        # Generation curtailment
+        if params.rg_curt:
+            for g in model.generators:
+                sg_curt = pe.value(model.sg_curt[g, s_o])
+                obj += cost_res_curt * network.baseMVA * sg_curt
+
+    elif params.obj_type == OBJ_CONGESTION_MANAGEMENT:
+
+        pen_load_curtailment = pe.value(model.penalty_load_curtailment)
+        pen_flex_usage = pe.value(model.penalty_flex_usage)
+
+        # Consumption curtailment
+        if params.l_curt:
+            for c in model.loads:
+                pc_curt = pe.value(model.pc_curt_down[c, s_o] + model.pc_curt_up[c, s_o])
+                qc_curt = pe.value(model.qc_curt_down[c, s_o] + model.qc_curt_up[c, s_o])
+                obj += pen_load_curtailment * network.baseMVA * (pc_curt + qc_curt)
+
+        # Demand side flexibility
+        if params.fl_reg:
+            for c in model.loads:
+                pc_flex = pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o])
+                qc_flex = pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o])
+                obj += pen_flex_usage * network.baseMVA * (pc_flex + qc_flex)
+
+    return obj
+
+
+def _compute_load_per_scenario(network, model, s_o):
+    total_load = {'p': 0.00, 'q': 0.00}
+    for c in model.loads:
+        total_load['p'] += network.baseMVA * pe.value(model.pc[c, s_o])
+        total_load['q'] += network.baseMVA * pe.value(model.qc[c, s_o])
+        if network.params.fl_reg:
+            total_load['p'] += network.baseMVA * pe.value(model.flex_p_up[c, s_o] - model.flex_p_down[c, s_o])
+            total_load['q'] += network.baseMVA * pe.value(model.flex_q_up[c, s_o] - model.flex_q_down[c, s_o])
+        if network.params.l_curt:
+            total_load['p'] -= network.baseMVA * pe.value(model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o])
+            total_load['q'] -= network.baseMVA * pe.value(model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o])
+    return total_load
+
+
+def _compute_load_curtailment_per_scenario(network, model, s_o):
+    load_curtailment = {'p': 0.00, 'q': 0.00}
+    if network.params.l_curt:
+        load_curtailment_scenario = {'p': 0.00, 'q': 0.00}
+        for c in model.loads:
+            load_curtailment_scenario['p'] += pe.value(model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o]) * network.baseMVA
+            load_curtailment_scenario['q'] += pe.value(model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o]) * network.baseMVA
+    return load_curtailment
+
+
+def _compute_flexibility_per_scenario(network, model, s_o):
+    flexibility_used = {'p': 0.00, 'q': 0.00}
+    if network.params.fl_reg:
+        for c in model.loads:
+            flexibility_used['p'] += pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o]) * network.baseMVA
+            flexibility_used['q'] += pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o]) * network.baseMVA
+    return flexibility_used
+
+
+def _compute_cost_flexibility_per_scenario(network, model, s_o, t):
+    cost = 0.0
+    if network.params.obj_type == OBJ_MIN_COST:
+        c_flex = network.cost_flex
+        if network.params.fl_reg:
+            for c in model.loads:
+                cost += c_flex[t] * pe.value(model.flex_p_up[c, s_o]) * network.baseMVA
+                cost += c_flex[t] * pe.value(model.flex_p_down[c, s_o]) * network.baseMVA
+    return cost
+
+
+def _compute_generation_per_scenario(network, model, s_o):
+    total_gen = {'p': 0.00, 'q': 0.00}
+    for g in model.generators:
+        total_gen['p'] += network.baseMVA * pe.value(model.pg[g, s_o])
+        total_gen['q'] += network.baseMVA * pe.value(model.qg[g, s_o])
+    return total_gen
+
+
+def _compute_conventional_generation_per_scenario(network, model, s_o):
+    total_gen = {'p': 0.00, 'q': 0.00}
+    for g in model.generators:
+        if network.generators[g].gen_type == GEN_CONV:
+            total_gen['p'] += network.baseMVA * pe.value(model.pg[g, s_o])
+            total_gen['q'] += network.baseMVA * pe.value(model.qg[g, s_o])
+    return total_gen
+
+
+def _compute_cost_conventional_generation_per_scenario(network, model, s_o, t):
+    cost = 0.00
+    if network.params.obj_type == OBJ_MIN_COST:
+        c_p = network.cost_energy_p
+        for g in model.generators:
+            if network.generators[g].is_controllable():
+                if (not network.is_transmission) and network.generators[g].gen_type == GEN_REFERENCE:
+                    continue
+                pg = pe.value(model.pg[g, s_o])
+                cost += c_p[t] * network.baseMVA * pg
+    return cost
+
+
+def _compute_renewable_generation_per_scenario(network, model, s_o):
+    total_renewable_gen = {'p': 0.00, 'q': 0.00, 's': 0.00}
+    for g in model.generators:
+        if network.generators[g].is_renewable():
+            total_renewable_gen['p'] += network.baseMVA * pe.value(model.pg[g, s_o])
+            total_renewable_gen['q'] += network.baseMVA * pe.value(model.qg[g, s_o])
+            if network.params.rg_curt:
+                total_renewable_gen['s'] += network.baseMVA * pe.value(model.sg_abs[g, s_o])
+    return total_renewable_gen
+
+
+def _compute_renewable_generation_curtailed_per_scenario(network, model, s_o):
+    gen_curtailment = {'p': 0.00, 'q': 0.00, 's': 0.00}
+    if network.params.rg_curt:
+        for g in model.generators:
+            if network.generators[g].is_curtaillable():
+                gen_curtailment['s'] += pe.value(model.sg_curt[g, s_o]) * network.baseMVA
+    return gen_curtailment
+
+
+def _compute_losses_per_scenario(network, model, s_o):
+    power_losses = 0.0
+    for k in model.branches:
+        power_losses += _get_branch_power_losses(network, model, k, s_o)
+    return power_losses
 
 
 def _write_optimization_results_to_excel(network, data_dir, processed_results, filename):
@@ -3643,17 +3875,17 @@ def _pre_process_parallel_branches(branches):
     return abs(z_eq.real), abs(z_eq.imag), ysh_eq.real, ysh_eq.imag
 
 
-def _get_branch_power_losses(network, params, model, branch_idx, s_o):
+def _get_branch_power_losses(network, model, branch_idx, s_o):
 
     # Active power flow, from i to j and from j to i
     branch = network.branches[branch_idx]
-    pij, _ = _get_branch_power_flow(network, params, branch, branch.fbus, branch.tbus, model, s_o)
-    pji, _ = _get_branch_power_flow(network, params, branch, branch.tbus, branch.fbus, model, s_o)
+    pij, _ = _get_branch_power_flow(network, branch, branch.fbus, branch.tbus, model, s_o)
+    pji, _ = _get_branch_power_flow(network, branch, branch.tbus, branch.fbus, model, s_o)
 
     return abs(pij + pji)
 
 
-def _get_branch_power_flow(network, params, branch, fbus, tbus, model, s_o):
+def _get_branch_power_flow(network, branch, fbus, tbus, model, s_o):
 
     fbus_idx = network.get_node_idx(fbus)
     tbus_idx = network.get_node_idx(tbus)
