@@ -46,8 +46,14 @@ class Network:
     def determine_pq_map(self, t=0, num_steps=4, print_pq_map=False):
         return _determine_pq_map(self, t=t, num_steps=num_steps, print_pq_map=print_pq_map)
 
+    def get_initial_solution(self, t=0):
+        return _get_initial_solution(self, t=t)
+
     def update_of_to_settlement(self, model):
         _update_of_to_settlement(self, model)
+
+    def get_interface_voltage_magnitude(self, model):
+        return _get_interface_voltage_magnitude(self, model)
 
     def get_interface_power_flow(self, model):
         return _get_interface_power_flow(self, model)
@@ -995,7 +1001,7 @@ def _build_model(network, t):
 #   PQ MAPS optimization functions
 # ======================================================================================================================
 def _determine_pq_map(network, t, num_steps, print_pq_map):
-    initial_solution = _get_initial_solution(network, t=t)
+    initial_solution = network.get_initial_solution(t=t)
     vertices = _get_pq_map_vertices(network, t=t, num_steps=num_steps)
     hull = ConvexHull(vertices)
     hull_vertices = vertices[hull.vertices]
@@ -1054,18 +1060,25 @@ def _build_pq_map_model(network, t):
 def _update_of_to_settlement(network, model):
 
     s_base = network.baseMVA
+    ref_node_id = network.get_reference_node_id()
+    ref_node_idx = network.get_node_idx(ref_node_id)
     ref_gen_idx = network.get_reference_gen_idx()
 
     # Add expected interface power flow variables
+    expected_vmag = 0.00
     expected_pf_p = 0.00
     expected_pf_q = 0.00
+    model.expected_interface_vmag = pe.Var(domain=pe.Reals, initialize=0.00)
     model.expected_interface_pf_p = pe.Var(domain=pe.Reals, initialize=0.00)
     model.expected_interface_pf_q = pe.Var(domain=pe.Reals, initialize=0.00)
     model.interface_expected_values = pe.ConstraintList()
     for s_o in model.scenarios_operation:
         omega_oper = network.prob_operation_scenarios[s_o]
+        expected_vmag += omega_oper * model.e[ref_node_idx, s_o]
         expected_pf_p += omega_oper * model.pg[ref_gen_idx, s_o]
         expected_pf_q += omega_oper * model.qg[ref_gen_idx, s_o]
+    model.interface_expected_values.add(model.expected_interface_vmag <= expected_vmag + EQUALITY_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_vmag >= expected_vmag - EQUALITY_TOLERANCE)
     model.interface_expected_values.add(model.expected_interface_pf_p <= expected_pf_p + EQUALITY_TOLERANCE)
     model.interface_expected_values.add(model.expected_interface_pf_p >= expected_pf_p - EQUALITY_TOLERANCE)
     model.interface_expected_values.add(model.expected_interface_pf_q <= expected_pf_q + EQUALITY_TOLERANCE)
@@ -1073,19 +1086,21 @@ def _update_of_to_settlement(network, model):
 
     # Regularization -- Added to OF to minimize deviations from scenarios to expected values
     obj = model.objective.expr
-    ref_gen_idx = network.get_reference_gen_idx()
     model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
     model.penalty_regularization.fix(PENALTY_REGULARIZATION)
     for s_o in model.scenarios_operation:
+        obj += model.penalty_regularization * (model.e[ref_node_idx, s_o] - model.expected_interface_vmag) ** 2
         obj += model.penalty_regularization * s_base * (model.pg[ref_gen_idx, s_o] - model.expected_interface_pf_p) ** 2
         obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.expected_interface_pf_q) ** 2
 
     # New objective function (settlement)
     model.penalty_settlement = pe.Var(domain=pe.NonNegativeReals)
     model.penalty_settlement.fix(PENALTY_SETTLEMENT)
+    model.interface_vmag_req = pe.Var(domain=pe.Reals, initialize=0.00)
     model.interface_pf_p_req = pe.Var(domain=pe.Reals, initialize=0.00)
     model.interface_pf_q_req = pe.Var(domain=pe.Reals, initialize=0.00)
     for s_o in model.scenarios_operation:
+        obj += model.penalty_regularization * (model.e[ref_node_idx, s_o] - model.interface_vmag_req) ** 2
         obj += model.penalty_regularization * s_base * (model.pg[ref_gen_idx, s_o] - model.interface_pf_p_req) ** 2
         obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.interface_pf_q_req) ** 2
 
@@ -1094,36 +1109,45 @@ def _update_of_to_settlement(network, model):
 def _get_initial_solution(network, t):
 
     model = network.build_model(t=t)
+    ref_node_id = network.get_reference_node_id()
     ref_gen_idx = network.get_reference_gen_idx()
+    adn_node_idx = network.get_node_idx(ref_node_id)
 
     # Add expected interface power flow variables
+    expected_vmag = 0.00
     expected_pf_p = 0.00
     expected_pf_q = 0.00
+    model.expected_interface_vmag = pe.Var(domain=pe.NonNegativeReals, initialize=1.00)
     model.expected_interface_pf_p = pe.Var(domain=pe.Reals, initialize=0.00)
     model.expected_interface_pf_q = pe.Var(domain=pe.Reals, initialize=0.00)
     model.interface_expected_values = pe.ConstraintList()
     for s_o in model.scenarios_operation:
         omega_oper = network.prob_operation_scenarios[s_o]
+        expected_vmag += omega_oper * model.e[adn_node_idx, s_o]
         expected_pf_p += omega_oper * model.pg[ref_gen_idx, s_o]
         expected_pf_q += omega_oper * model.qg[ref_gen_idx, s_o]
+    model.interface_expected_values.add(model.expected_interface_vmag <= expected_vmag + SMALL_TOLERANCE)
+    model.interface_expected_values.add(model.expected_interface_vmag >= expected_vmag - SMALL_TOLERANCE)
     model.interface_expected_values.add(model.expected_interface_pf_p <= expected_pf_p + EQUALITY_TOLERANCE)
     model.interface_expected_values.add(model.expected_interface_pf_p >= expected_pf_p - EQUALITY_TOLERANCE)
     model.interface_expected_values.add(model.expected_interface_pf_q <= expected_pf_q + EQUALITY_TOLERANCE)
     model.interface_expected_values.add(model.expected_interface_pf_q >= expected_pf_q - EQUALITY_TOLERANCE)
 
-    # # Regularization -- Added to OF to minimize deviations from scenarios to expected values
-    # s_base = network.baseMVA
-    # obj = model.objective.expr
-    # model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
-    # model.penalty_regularization.fix(PENALTY_REGULARIZATION)
-    # for s_o in model.scenarios_operation:
-    #     obj += model.penalty_regularization * s_base * (model.pg[ref_gen_idx, s_o] - model.expected_interface_pf_p) ** 2
-    #     obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.expected_interface_pf_q) ** 2
-    # model.objective.expr = obj
+    # Regularization -- Added to OF to minimize deviations from scenarios to expected values
+    s_base = network.baseMVA
+    obj = model.objective.expr
+    model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
+    model.penalty_regularization.fix(PENALTY_REGULARIZATION)
+    for s_o in model.scenarios_operation:
+        obj += model.penalty_regularization * (model.e[adn_node_idx, s_o] - model.expected_interface_vmag) ** 2
+        obj += model.penalty_regularization * s_base * (model.pg[ref_gen_idx, s_o] - model.expected_interface_pf_p) ** 2
+        obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.expected_interface_pf_q) ** 2
+    model.objective.expr = obj
 
-    results = network.optimize(model)
+    network.optimize(model)
+    vg = network.get_interface_voltage_magnitude(model)
     pg, qg = network.get_interface_power_flow(model)
-    solution = {'Pg': pg, 'Qg': qg}
+    solution = {'Pg': pg, 'Qg': qg, 'Vg': vg}
 
     return solution
 
@@ -1196,6 +1220,11 @@ def _plot_pq_map(network, instant, num_steps, vertices, hull, hull_vertices, ini
     plt.ylabel("Q, [MVAr]")
     filename = os.path.join(network.diagrams_dir, f'{network.name}_t={instant}_n={num_steps}.pdf')
     plt.savefig(filename, bbox_inches='tight')
+
+
+def _get_interface_voltage_magnitude(network, model):
+    vg = pe.value(model.expected_interface_vmag)
+    return vg
 
 
 def _get_interface_power_flow(network, model):
