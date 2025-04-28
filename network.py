@@ -1973,6 +1973,9 @@ def _process_results_interface(network, model):
                 vmag = sqrt(pe.value(model.e_actual[node_idx, s_o] ** 2 + model.f_actual[node_idx, s_o] ** 2))
                 pf_p = pe.value(model.pc[load_idx, s_o]) * network.baseMVA
                 pf_q = pe.value(model.qc[load_idx, s_o]) * network.baseMVA
+                if network.params.fl_reg:
+                    pf_p += pe.value(model.flex_p_up[load_idx, s_o] - model.flex_p_down[load_idx, s_o]) * network.baseMVA
+                    pf_q += pe.value(model.flex_q_up[load_idx, s_o] - model.flex_q_down[load_idx, s_o]) * network.baseMVA
                 results[node_id][s_o]['v'] = vmag
                 results[node_id][s_o]['p'] = pf_p
                 results[node_id][s_o]['q'] = pf_q
