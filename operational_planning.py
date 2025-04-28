@@ -437,7 +437,9 @@ def create_transmission_network_model(transmission_network, consensus_vars, t, c
     # Update model with expected interface values
     tso_model.active_distribution_networks = range(len(transmission_network.active_distribution_network_nodes))
 
-    # Free Vmag, Pc, Qc at the interface nodes
+    # Free Vmag, at the interface nodes
+    # Fix Pc, Qc at the interface nodes
+    # Free Plex, Qflex at the interface nodes
     for dn in tso_model.active_distribution_networks:
         adn_node_id = transmission_network.active_distribution_network_nodes[dn]
         adn_node_idx = transmission_network.get_node_idx(adn_node_id)
@@ -457,17 +459,15 @@ def create_transmission_network_model(transmission_network, consensus_vars, t, c
                 tso_model.slack_f[adn_node_idx, s_o].setub(EQUALITY_TOLERANCE)
                 tso_model.slack_f[adn_node_idx, s_o].setlb(-EQUALITY_TOLERANCE)
 
-            tso_model.pc[adn_load_idx, s_o].fixed = False
-            tso_model.pc[adn_load_idx, s_o].setub(None)
-            tso_model.pc[adn_load_idx, s_o].setlb(None)
-            tso_model.qc[adn_load_idx, s_o].fixed = False
-            tso_model.qc[adn_load_idx, s_o].setub(None)
-            tso_model.qc[adn_load_idx, s_o].setlb(None)
-            if transmission_network.params.fl_reg:
-                tso_model.flex_p_up[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
-                tso_model.flex_p_down[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
-                tso_model.flex_q_up[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
-                tso_model.flex_q_down[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
+            init_solution = consensus_vars['pf']['dso']['current'][adn_node_id]
+            tso_model.pc[adn_load_idx, s_o].setub(init_solution['p'] / s_base + EQUALITY_TOLERANCE)
+            tso_model.pc[adn_load_idx, s_o].setlb(init_solution['p'] / s_base - EQUALITY_TOLERANCE)
+            tso_model.qc[adn_load_idx, s_o].setub(init_solution['q'] / s_base + EQUALITY_TOLERANCE)
+            tso_model.qc[adn_load_idx, s_o].setlb(init_solution['q'] / s_base - EQUALITY_TOLERANCE)
+            tso_model.flex_p_up[adn_load_idx, s_o].setub(None)
+            tso_model.flex_p_down[adn_load_idx, s_o].setub(None)
+            tso_model.flex_q_up[adn_load_idx, s_o].setub(None)
+            tso_model.flex_q_down[adn_load_idx, s_o].setub(None)
             if transmission_network.params.l_curt:
                 tso_model.pc_curt_down[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
                 tso_model.pc_curt_up[adn_load_idx, s_o].setub(EQUALITY_TOLERANCE)
@@ -489,8 +489,8 @@ def create_transmission_network_model(transmission_network, consensus_vars, t, c
         for s_o in tso_model.scenarios_operation:
             omega_oper = transmission_network.prob_operation_scenarios[s_o]
             expected_vmag_sqr += omega_oper * (tso_model.e[adn_node_idx, s_o] ** 2 + tso_model.f[adn_node_idx, s_o] ** 2)
-            expected_pf_p += omega_oper * tso_model.pc[adn_load_idx, s_o]
-            expected_pf_q += omega_oper * tso_model.qc[adn_load_idx, s_o]
+            expected_pf_p += omega_oper * tso_model.pc[adn_load_idx, s_o] + tso_model.flex_p_up[adn_load_idx, s_o] - tso_model.flex_p_down[adn_load_idx, s_o]
+            expected_pf_q += omega_oper * tso_model.qc[adn_load_idx, s_o] + tso_model.flex_q_up[adn_load_idx, s_o] - tso_model.flex_q_down[adn_load_idx, s_o]
         tso_model.interface_expected_values.add(tso_model.expected_interface_vmag_sqr[dn] <= expected_vmag_sqr + SMALL_TOLERANCE)
         tso_model.interface_expected_values.add(tso_model.expected_interface_vmag_sqr[dn] >= expected_vmag_sqr - SMALL_TOLERANCE)
         tso_model.interface_expected_values.add(tso_model.expected_interface_pf_p[dn] <= expected_pf_p + SMALL_TOLERANCE)
