@@ -68,4 +68,4 @@ if __name__ == '__main__':
 
     operational_planning.run_without_coordination(t=11, filename=f'{operational_planning.name}_uncoordinated')
     operational_planning.run_hierarchical_coordination(t=11, num_steps=8, filename=f'{operational_planning.name}_hierarchical', print_pq_map=False)
-    # operational_planning.run_distributed_coordination(t=11, filename=f'{operational_planning.name}_distributed')
+    operational_planning.run_distributed_coordination(t=11, filename=f'{operational_planning.name}_distributed')
