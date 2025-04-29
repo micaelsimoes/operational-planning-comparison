@@ -197,7 +197,7 @@ def _get_market_costs_from_excel_file(filename):
 # ======================================================================================================================
 def _run_without_coordination(operational_planning, t):
 
-    print('[INFO] Running HIERARCHICAL OPERATIONAL PLANNING...')
+    print('[INFO] Running NON-COORDINATED OPERATIONAL PLANNING...')
 
     transmission_network = operational_planning.transmission_network
     distribution_networks = operational_planning.distribution_networks
