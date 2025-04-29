@@ -5,6 +5,7 @@ import pyomo.opt as po
 import pyomo.environ as pe
 from math import acos, sqrt, tan, atan2, pi, isclose
 import matplotlib.pyplot as plt
+import networkx as nx
 from scipy.spatial import ConvexHull
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
@@ -218,6 +219,9 @@ class Network:
 
     def perform_network_check(self):
         _perform_network_check(self)
+
+    def plot_diagram(self):
+        _plot_networkx_diagram(self)
 
     def write_optimization_results_to_excel(self, results, filename=str()):
         if not filename:
@@ -1105,6 +1109,7 @@ def _update_of_to_settlement(network, model):
         obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.interface_pf_q_req) ** 2
 
     model.objective.expr = obj
+
 
 def _get_initial_solution(network, t):
 
@@ -3867,6 +3872,81 @@ def _write_relaxation_slacks_scenarios_results_to_excel(network, workbook, resul
                     sheet.cell(row=row_idx, column=4).value = comp
                     sheet.cell(row=row_idx, column=4).number_format = decimal_style
                     row_idx = row_idx + 1
+
+
+# ======================================================================================================================
+#   NETWORK diagram functions (plot)
+# ======================================================================================================================
+def _plot_networkx_diagram(network, data_dir='data'):
+
+    node_labels = {}
+    node_voltage_labels = {}
+    node_colors = ['lightblue' for _ in network.nodes]
+
+    # Aux - Encapsulated Branch list
+    branches = []
+    edge_labels = {}
+    line_list, open_line_list = [], []
+    transf_list, open_transf_list = [], []
+    for branch in network.branches:
+        if branch.is_transformer:
+            branches.append({'type': 'transformer', 'data': branch})
+        else:
+            branches.append({'type': 'line', 'data': branch})
+
+    # Build graph
+    graph = nx.Graph()
+    for i in range(len(network.nodes)):
+        node = network.nodes[i]
+        graph.add_node(node.bus_i)
+        node_labels[node.bus_i] = '{}'.format(node.bus_i)
+        node_voltage_labels[node.bus_i] = '{} kV'.format(node.base_kv)
+        if node.type == BUS_REF:
+            node_colors[i] = 'red'
+        elif node.type == BUS_PV:
+            node_colors[i] = 'green'
+
+    for i in range(len(branches)):
+        branch = branches[i]
+        if branch['type'] == 'line':
+            graph.add_edge(branch['data'].fbus, branch['data'].tbus)
+            if branch['data'].status:
+                line_list.append((branch['data'].fbus, branch['data'].tbus))
+            else:
+                open_line_list.append((branch['data'].fbus, branch['data'].tbus))
+        if branch['type'] == 'transformer':
+            graph.add_edge(branch['data'].fbus, branch['data'].tbus)
+            if branch['data'].status:
+                transf_list.append((branch['data'].fbus, branch['data'].tbus))
+            else:
+                open_transf_list.append((branch['data'].fbus, branch['data'].tbus))
+            ratio = '{:.3f}'.format(branch['data'].ratio)
+            edge_labels[(branch['data'].fbus, branch['data'].tbus)] = f'1:{ratio}'
+
+    # Plot - coordinates
+    pos = nx.spring_layout(graph)
+    pos_above, pos_below = {}, {}
+    for k, v in pos.items():
+        pos_above[k] = (v[0], v[1] + 0.050)
+        pos_below[k] = (v[0], v[1] - 0.050)
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(12, 12))
+    nx.draw_networkx_nodes(graph, ax=ax, pos=pos, node_color=node_colors, node_size=200)
+    nx.draw_networkx_labels(graph, ax=ax, pos=pos, labels=node_labels, font_size=10)
+    nx.draw_networkx_labels(graph, ax=ax, pos=pos_below, labels=node_voltage_labels, font_size=5)
+    nx.draw_networkx_edges(graph, ax=ax, pos=pos, edgelist=line_list, width=1.00, edge_color='black')
+    nx.draw_networkx_edges(graph, ax=ax, pos=pos, edgelist=transf_list, width=1.50, edge_color='blue')
+    nx.draw_networkx_edges(graph, ax=ax, pos=pos, edgelist=open_line_list, style='dashed', width=1.00, edge_color='red')
+    nx.draw_networkx_edges(graph, ax=ax, pos=pos, edgelist=open_transf_list, style='dashed', width=1.50, edge_color='red')
+    nx.draw_networkx_edge_labels(graph, ax=ax, pos=pos, edge_labels=edge_labels, font_size=5, rotate=False)
+    plt.axis('off')
+
+    filename = os.path.join(network.diagrams_dir, f'{network.name}.pdf')
+    plt.savefig(filename, bbox_inches='tight')
+
+    filename = os.path.join(network.diagrams_dir, f'{network.name}.png')
+    plt.savefig(filename, bbox_inches='tight')
 
 
 # ======================================================================================================================
