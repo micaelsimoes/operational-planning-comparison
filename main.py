@@ -69,5 +69,5 @@ if __name__ == '__main__':
     # transmission_network.write_optimization_results_to_excel(processed_results, filename='test')
 
     operational_planning.run_without_coordination(t=t, filename=f'{operational_planning.name}_uncoordinated_t={t}')
-    # operational_planning.run_hierarchical_coordination(t=t, num_steps=8, filename=f'{operational_planning.name}_hierarchical_t={t}', print_pq_map=False)
-    # operational_planning.run_distributed_coordination(t=t, filename=f'{operational_planning.name}_distributed_t={t}')
+    operational_planning.run_hierarchical_coordination(t=t, num_steps=2, filename=f'{operational_planning.name}_hierarchical_t={t}', print_pq_map=False)
+    operational_planning.run_distributed_coordination(t=t, filename=f'{operational_planning.name}_distributed_t={t}')

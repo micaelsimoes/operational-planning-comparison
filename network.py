@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+from copy import copy
 import pyomo.opt as po
 import pyomo.environ as pe
 from math import acos, sqrt, tan, atan2, pi, isclose
@@ -1005,6 +1006,7 @@ def _build_model(network, t):
 #   PQ MAPS optimization functions
 # ======================================================================================================================
 def _determine_pq_map(network, t, num_steps, print_pq_map):
+    print(f'[INFO] Determining PQ, Network {network.name}...')
     initial_solution = network.get_initial_solution(t=t)
     vertices = _get_pq_map_vertices(network, t=t, num_steps=num_steps)
     hull = ConvexHull(vertices)
@@ -1089,7 +1091,7 @@ def _update_of_to_settlement(network, model):
     model.interface_expected_values.add(model.expected_interface_pf_q >= expected_pf_q - EQUALITY_TOLERANCE)
 
     # Regularization -- Added to OF to minimize deviations from scenarios to expected values
-    obj = model.objective.expr
+    obj = copy(model.objective.expr)
     model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
     model.penalty_regularization.fix(PENALTY_REGULARIZATION)
     for s_o in model.scenarios_operation:
@@ -1103,11 +1105,9 @@ def _update_of_to_settlement(network, model):
     model.interface_vmag_req = pe.Var(domain=pe.Reals, initialize=0.00)
     model.interface_pf_p_req = pe.Var(domain=pe.Reals, initialize=0.00)
     model.interface_pf_q_req = pe.Var(domain=pe.Reals, initialize=0.00)
-    for s_o in model.scenarios_operation:
-        obj += model.penalty_regularization * (model.e[ref_node_idx, s_o] - model.interface_vmag_req) ** 2
-        obj += model.penalty_regularization * s_base * (model.pg[ref_gen_idx, s_o] - model.interface_pf_p_req) ** 2
-        obj += model.penalty_regularization * s_base * (model.qg[ref_gen_idx, s_o] - model.interface_pf_q_req) ** 2
-
+    obj += model.penalty_regularization * (model.expected_interface_vmag - model.interface_vmag_req) ** 2
+    obj += model.penalty_regularization * s_base * (model.expected_interface_pf_p - model.interface_pf_p_req) ** 2
+    obj += model.penalty_regularization * s_base * (model.expected_interface_pf_q - model.interface_pf_q_req) ** 2
     model.objective.expr = obj
 
 
@@ -1166,7 +1166,7 @@ def _get_pq_map_vertices(network, t, num_steps):
 
         alpha = n/num_steps
         beta = 1 - alpha
-        print(f'alpha={alpha:.3f}_beta={beta:.3f}')
+        print(f'\t - alpha={alpha:.3f}_beta={beta:.3f}')
 
         model.alpha.fix(alpha)
         model.beta.fix(beta)
@@ -1976,11 +1976,8 @@ def _process_results_interface(network, model):
             for s_o in model.scenarios_operation:
                 results[node_id][s_o] = dict()
                 vmag = sqrt(pe.value(model.e_actual[node_idx, s_o] ** 2 + model.f_actual[node_idx, s_o] ** 2))
-                pf_p = pe.value(model.pc[load_idx, s_o]) * network.baseMVA
-                pf_q = pe.value(model.qc[load_idx, s_o]) * network.baseMVA
-                if network.params.fl_reg:
-                    pf_p += pe.value(model.flex_p_up[load_idx, s_o] - model.flex_p_down[load_idx, s_o]) * network.baseMVA
-                    pf_q += pe.value(model.flex_q_up[load_idx, s_o] - model.flex_q_down[load_idx, s_o]) * network.baseMVA
+                pf_p = pe.value(model.pc[load_idx, s_o] + model.flex_p_up[load_idx, s_o] - model.flex_p_down[load_idx, s_o]) * network.baseMVA
+                pf_q = pe.value(model.qc[load_idx, s_o] + model.flex_q_up[load_idx, s_o] - model.flex_q_down[load_idx, s_o]) * network.baseMVA
                 results[node_id][s_o]['v'] = vmag
                 results[node_id][s_o]['p'] = pf_p
                 results[node_id][s_o]['q'] = pf_q
@@ -2229,16 +2226,14 @@ def _compute_load_curtailment(network, model):
     load_curtailment = {'p': 0.00, 'q': 0.00}
 
     if network.params.l_curt:
-        for s_m in model.scenarios_market:
-            for s_o in model.scenarios_operation:
-                load_curtailment_scenario = {'p': 0.00, 'q': 0.00}
-                for c in model.loads:
-                    for p in model.periods:
-                        load_curtailment_scenario['p'] += pe.value(model.pc_curt_down[c, s_m, s_o, p] - model.pc_curt_up[c, s_m, s_o, p]) * network.baseMVA
-                        load_curtailment_scenario['q'] += pe.value(model.qc_curt_down[c, s_m, s_o, p] - model.qc_curt_up[c, s_m, s_o, p]) * network.baseMVA
-
-                load_curtailment['p'] += load_curtailment_scenario['p'] * (network.prob_market_scenarios[s_m] * network.prob_operation_scenarios[s_o])
-                load_curtailment['q'] += load_curtailment_scenario['q'] * (network.prob_market_scenarios[s_m] * network.prob_operation_scenarios[s_o])
+        for s_o in model.scenarios_operation:
+            load_curtailment_scenario = {'p': 0.00, 'q': 0.00}
+            for c in model.loads:
+                for p in model.periods:
+                    load_curtailment_scenario['p'] += pe.value(model.pc_curt_down[c, s_o] - model.pc_curt_up[c, s_o]) * network.baseMVA
+                    load_curtailment_scenario['q'] += pe.value(model.qc_curt_down[c, s_o] - model.qc_curt_up[c, s_o]) * network.baseMVA
+            load_curtailment['p'] += load_curtailment_scenario['p'] * network.prob_operation_scenarios[s_o]
+            load_curtailment['q'] += load_curtailment_scenario['q'] * network.prob_operation_scenarios[s_o]
 
     return load_curtailment
 
@@ -2251,9 +2246,8 @@ def _compute_flexibility_used(network, model):
         for s_o in model.scenarios_operation:
             flexibility_used_scenario = {'p': 0.0, 'q': 0.0}
             for c in model.loads:
-                flexibility_used_scenario['p'] += pe.value(model.flex_p_up[c, s_o] + model.flex_p_down[c, s_o]) * network.baseMVA
-                flexibility_used_scenario['q'] += pe.value(model.flex_q_up[c, s_o] + model.flex_q_down[c, s_o]) * network.baseMVA
-
+                flexibility_used_scenario['p'] += abs(pe.value(model.flex_p_up[c, s_o] - model.flex_p_down[c, s_o])) * network.baseMVA
+                flexibility_used_scenario['q'] += abs(pe.value(model.flex_q_up[c, s_o] - model.flex_q_down[c, s_o])) * network.baseMVA
             flexibility_used['p'] += flexibility_used_scenario['p'] * network.prob_operation_scenarios[s_o]
             flexibility_used['q'] += flexibility_used_scenario['q'] * network.prob_operation_scenarios[s_o]
 

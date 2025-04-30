@@ -403,35 +403,42 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
     for dn in tn_model.active_distribution_networks:
         adn_node_id = transmission_network.active_distribution_network_nodes[dn]
         adn_pq_map = dn_models[adn_node_id]
-        adn_vmag_sqr = adn_pq_map['initial_solution']['Vg'] ** 2
-        tn_model.pq_maps.add(tn_model.expected_interface_vmag_sqr[dn] <= adn_vmag_sqr + EQUALITY_TOLERANCE)
-        tn_model.pq_maps.add(tn_model.expected_interface_vmag_sqr[dn] >= adn_vmag_sqr - EQUALITY_TOLERANCE)
-        # initial_solution = adn_pq_map['initial_solution']
+        initial_solution = adn_pq_map['initial_solution']
+        tn_model.pq_maps.add(tn_model.expected_interface_vmag_sqr[dn] <= initial_solution['Vg'] ** 2 + EQUALITY_TOLERANCE)
+        tn_model.pq_maps.add(tn_model.expected_interface_vmag_sqr[dn] >= initial_solution['Vg'] ** 2  - EQUALITY_TOLERANCE)
         for ineq in adn_pq_map['inequalities']:
             a = ineq['Pg']
             b = ineq['Qg']
             c = ineq['c'] / transmission_network.baseMVA
             tn_model.pq_maps.add(a * tn_model.expected_interface_pf_p[dn] + b * tn_model.expected_interface_pf_q[dn] <= c)
-            # tn_model.pq_maps.add(tn_model.expected_interface_pf_p[dn] <= initial_solution['Pg'] / transmission_network.baseMVA * 1.10)
-            # tn_model.pq_maps.add(tn_model.expected_interface_pf_p[dn] >= initial_solution['Pg'] / transmission_network.baseMVA * 0.90)
-            # tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] <= initial_solution['Qg'] / transmission_network.baseMVA * 1.10)
-            # tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] >= initial_solution['Qg'] / transmission_network.baseMVA * 0.90)
+        # tn_model.pq_maps.add(tn_model.expected_interface_pf_p[dn] <= initial_solution['Pg'] / transmission_network.baseMVA * 1.10)
+        # tn_model.pq_maps.add(tn_model.expected_interface_pf_p[dn] >= initial_solution['Pg'] / transmission_network.baseMVA * 0.90)
+        # if initial_solution['Qg'] > 0:
+        #     tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] <= initial_solution['Qg'] / transmission_network.baseMVA * 1.10)
+        #     tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] >= initial_solution['Qg'] / transmission_network.baseMVA * 0.90)
+        # else:
+        #     tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] >= initial_solution['Qg'] / transmission_network.baseMVA * 1.10)
+        #     tn_model.pq_maps.add(tn_model.expected_interface_pf_q[dn] <= initial_solution['Qg'] / transmission_network.baseMVA * 0.90)
 
     # Regularization -- Added to OF to minimize deviations from scenarios to expected values
     obj = copy(tn_model.objective.expr)
     tn_model.penalty_regularization = pe.Var(domain=pe.NonNegativeReals)
-    tn_model.penalty_regularization.fix(PENALTY_REGULARIZATION)
+    tn_model.penalty_regularization.fix(PENALTY_REGULARIZATION * 1e6)
     for dn in tn_model.active_distribution_networks:
         adn_node_id = transmission_network.active_distribution_network_nodes[dn]
         adn_node_idx = transmission_network.get_node_idx(adn_node_id)
         adn_load_idx = transmission_network.get_adn_load_idx(adn_node_id)
         for s_o in tn_model.scenarios_operation:
-            obj += tn_model.penalty_regularization * ((tn_model.e[adn_node_idx, s_o] ** 2 + tn_model.f[adn_node_idx, s_o] ** 2) - tn_model.expected_interface_vmag_sqr[dn]) ** 2
-            obj += tn_model.penalty_regularization * transmission_network.baseMVA * (tn_model.pc[adn_load_idx, s_o] - tn_model.expected_interface_pf_p[dn]) ** 2
-            obj += tn_model.penalty_regularization * transmission_network.baseMVA * (tn_model.qc[adn_load_idx, s_o] - tn_model.expected_interface_pf_q[dn]) ** 2
+            vmag_sqr = tn_model.e[adn_node_idx, s_o] ** 2 + tn_model.f[adn_node_idx, s_o] ** 2
+            pc = tn_model.pc[adn_load_idx, s_o] + tn_model.flex_p_up[adn_load_idx, s_o] - tn_model.flex_p_down[adn_load_idx, s_o]
+            qc = tn_model.qc[adn_load_idx, s_o] + tn_model.flex_q_up[adn_load_idx, s_o] - tn_model.flex_q_down[adn_load_idx, s_o]
+            obj += tn_model.penalty_regularization * (vmag_sqr - tn_model.expected_interface_vmag_sqr[dn]) ** 2
+            obj += tn_model.penalty_regularization * transmission_network.baseMVA * (pc - tn_model.expected_interface_pf_p[dn]) ** 2
+            obj += tn_model.penalty_regularization * transmission_network.baseMVA * (qc - tn_model.expected_interface_pf_q[dn]) ** 2
     tn_model.objective.expr = obj
 
     # Optimize TN, Get resulting interface PFs
+    print(f'[INFO] - Running OPF on {transmission_network.name} with hierarchical constraints...')
     results['tso'] = transmission_network.optimize(tn_model)
     pf_requested = dict()
     for dn in tn_model.active_distribution_networks:
@@ -443,17 +450,19 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
 
     # Run OPF on DNs, considering established power flow (settlement)
     dn_models = dict()
+    print('[INFO] - Running settlement on Distribution Networks...')
     for node_id in distribution_networks:
 
         distribution_network = distribution_networks[node_id]
+        print(f'[INFO]\t - Network {distribution_network.name}...')
+
         dn_model = distribution_network.build_model(t=t)
         distribution_network.update_of_to_settlement(dn_model)
-
         dn_model.interface_vmag_req.fix(pf_requested[node_id]['v_sqr'])
         dn_model.interface_pf_p_req.fix(pf_requested[node_id]['p'] / distribution_network.baseMVA)
         dn_model.interface_pf_q_req.fix(pf_requested[node_id]['q'] / distribution_network.baseMVA)
-        results['dso'][node_id] = distribution_network.optimize(dn_model)
 
+        results['dso'][node_id] = distribution_network.optimize(dn_model)
         dn_models[node_id] = dn_model
 
     end = time.time()
@@ -671,9 +680,12 @@ def create_transmission_network_model(transmission_network, consensus_vars, t, c
         adn_node_idx = transmission_network.get_node_idx(adn_node_id)
         adn_load_idx = transmission_network.get_adn_load_idx(adn_node_id)
         for s_o in tso_model.scenarios_operation:
-            obj += tso_model.penalty_regularization * ((tso_model.e[adn_node_idx, s_o] ** 2 + tso_model.f[adn_node_idx, s_o] ** 2) - tso_model.expected_interface_vmag_sqr[dn]) ** 2
-            obj += tso_model.penalty_regularization * s_base * (tso_model.pc[adn_load_idx, s_o] - tso_model.expected_interface_pf_p[dn]) ** 2
-            obj += tso_model.penalty_regularization * s_base * (tso_model.qc[adn_load_idx, s_o] - tso_model.expected_interface_pf_q[dn]) ** 2
+            vmag_sqr = tso_model.e[adn_node_idx, s_o] ** 2 + tso_model.f[adn_node_idx, s_o] ** 2
+            pc = tso_model.pc[adn_load_idx, s_o] + tso_model.flex_p_up[adn_load_idx, s_o] - tso_model.flex_p_down[adn_load_idx, s_o]
+            qc = tso_model.qc[adn_load_idx, s_o] + tso_model.flex_q_up[adn_load_idx, s_o] - tso_model.flex_q_down[adn_load_idx, s_o]
+            obj += tso_model.penalty_regularization * (vmag_sqr - tso_model.expected_interface_vmag_sqr[dn]) ** 2
+            obj += tso_model.penalty_regularization * s_base * (pc - tso_model.expected_interface_pf_p[dn]) ** 2
+            obj += tso_model.penalty_regularization * s_base * (qc - tso_model.expected_interface_pf_q[dn]) ** 2
     if consider_shared_ess:
         for e in tso_model.shared_energy_storages:
             for s_o in tso_model.scenarios_operation:
