@@ -49,14 +49,14 @@ class OperationalPlanning:
         convergence, results, models, primal_evolution = _run_distributed_coordination(self, t, consider_shared_ess, debug_flag=debug_flag)
         if not filename:
             filename = self.name
-        self.write_operational_planning_results_to_excel(models, results, t=t, filename=filename, primal_evolution=primal_evolution)
+        self.write_operational_planning_results_to_excel(models, results, consider_shared_ess=consider_shared_ess, t=t, filename=filename, primal_evolution=primal_evolution)
         return convergence, results, models, primal_evolution
 
-    def write_operational_planning_results_to_excel(self, optimization_models, results, t=0, filename=str(), primal_evolution=list()):
+    def write_operational_planning_results_to_excel(self, optimization_models, results, consider_shared_ess=False, t=0, filename=str(), primal_evolution=list()):
         if not filename:
             filename = 'operational_planning_results'
         processed_results = _process_operational_planning_results(self, optimization_models['tso'], optimization_models['dso'], results, t=t)
-        _write_operational_planning_results_to_excel(self, processed_results, t, primal_evolution=primal_evolution, filename=filename)
+        _write_operational_planning_results_to_excel(self, processed_results, t, consider_shared_ess=consider_shared_ess, primal_evolution=primal_evolution, filename=filename)
 
     def get_primal_value(self, tso_model, dso_models):
         return _get_primal_value(self, tso_model, dso_models)
@@ -159,10 +159,6 @@ def _read_case_study(operational_planning):
     operational_planning.read_operational_planning_parameters_from_file(params_filename)
 
     _check_interface_nodes_base_voltage_consistency(operational_planning)
-
-    # Add Shared Energy Storages to Transmission and Distribution Networks
-    #_add_shared_energy_storage_to_transmission_network(operational_planning)
-    #_add_shared_energy_storage_to_distribution_network(operational_planning)
 
 
 # ======================================================================================================================
@@ -486,6 +482,11 @@ def _run_distributed_coordination(operational_planning, t, consider_shared_ess, 
     admm_parameters = operational_planning.params
     results = {'tso': dict(), 'dso': dict()}
 
+    # Add Shared Energy Storages to Transmission and Distribution Networks
+    if consider_shared_ess:
+        _add_shared_energy_storage_to_transmission_network(operational_planning)
+        _add_shared_energy_storage_to_distribution_network(operational_planning)
+
     # ------------------------------------------------------------------------------------------------------------------
     # 0. Initialization
 
@@ -772,7 +773,6 @@ def create_distribution_networks_models(distribution_networks, consensus_vars, t
             obj += dso_model.penalty_regularization * (dso_model.e[ref_node_idx, s_o] ** 2 - dso_model.expected_interface_vmag_sqr) ** 2
             obj += dso_model.penalty_regularization * s_base * (dso_model.pg[ref_gen_idx, s_o] - dso_model.expected_interface_pf_p) ** 2
             obj += dso_model.penalty_regularization * s_base * (dso_model.qg[ref_gen_idx, s_o] - dso_model.expected_interface_pf_q) ** 2
-        dso_model.objective.expr = obj
 
         if consider_shared_ess:
             shared_ess_idx = distribution_network.get_shared_energy_storage_idx(ref_node_id)
@@ -910,7 +910,7 @@ def update_transmission_model_to_admm(operational_planning, model, params, consi
     if consider_shared_ess:
         for e in model.shared_energy_storages:
 
-            shared_ess_rating = abs(transmission_network.network.shared_energy_storages[e].s)
+            shared_ess_rating = abs(transmission_network.shared_energy_storages[e].s)
             if isclose(shared_ess_rating, 0.00, abs_tol=SMALL_TOLERANCE):
                 shared_ess_rating = 0.01
 
@@ -981,14 +981,14 @@ def update_distribution_models_to_admm(operational_planning, models, params, con
             dso_model.expected_shared_ess_q.setlb(None)
 
         # Update costs (penalties) for the coordination procedure
-        dso_model.penalty_ess_usage.fix(0.00)
+        dso_model.penalty_ess_usage.fix(1e-6)
         if distribution_network.params.obj_type == OBJ_MIN_COST:
             dso_model.cost_res_curtailment.fix(0.00)
             dso_model.cost_load_curtailment.fix(COST_CONSUMPTION_CURTAILMENT)
         elif distribution_network.params.obj_type == OBJ_CONGESTION_MANAGEMENT:
-            dso_model.penalty_gen_curtailment.fix(0.00)
+            dso_model.penalty_gen_curtailment.fix(1e-2)
             dso_model.penalty_load_curtailment.fix(PENALTY_LOAD_CURTAILMENT)
-            dso_model.penalty_flex_usage.fix(0.00)
+            dso_model.penalty_flex_usage.fix(1e-3)
 
         # Add ADMM variables
         dso_model.rho_v = pe.Var(domain=pe.NonNegativeReals)
@@ -1114,7 +1114,7 @@ def update_transmission_coordination_model_and_solve(transmission_network, model
 
         # Update shared ESS capacity and power requests
         if consider_shared_ess:
-            shared_ess_idx = transmission_network.network.get_shared_energy_storage_idx(node_id)
+            shared_ess_idx = transmission_network.get_shared_energy_storage_idx(node_id)
             model.dual_ess_p_req[shared_ess_idx].fix(dual_ess['current'][node_id]['p'] / s_base)
             model.dual_ess_q_req[shared_ess_idx].fix(dual_ess['current'][node_id]['q'] / s_base)
             model.p_ess_req[shared_ess_idx].fix(ess_req['dso']['current'][node_id]['p'] / s_base)
@@ -1185,8 +1185,8 @@ def update_distribution_coordination_models_and_solve(distribution_networks, mod
         if consider_shared_ess:
             model.dual_ess_p_req.fix(dual_ess['current'][node_id]['p'] / s_base)
             model.dual_ess_q_req.fix(dual_ess['current'][node_id]['q'] / s_base)
-            model.p_ess_req.fix(ess_req['esso']['current'][node_id]['p'] / s_base)
-            model.q_ess_req.fix(ess_req['esso']['current'][node_id]['q'] / s_base)
+            model.p_ess_req.fix(ess_req['tso']['current'][node_id]['p'] / s_base)
+            model.q_ess_req.fix(ess_req['tso']['current'][node_id]['q'] / s_base)
             if params.previous_iter['ess']['dso']:
                 model.dual_ess_p_prev.fix(dual_ess['prev'][node_id]['p'] / s_base)
                 model.dual_ess_q_prev.fix(dual_ess['prev'][node_id]['q'] / s_base)
@@ -1210,14 +1210,13 @@ def create_admm_variables(operational_planning):
         'pf': {'tso': {'current': dict(), 'prev': dict()},
                'dso': {'current': dict(), 'prev': dict()}},
         'ess': {'tso': {'current': dict(), 'prev': dict()},
-                'dso': {'current': dict(), 'prev': dict()},
-                'esso': {'current': dict(), 'prev': dict()}}
+                'dso': {'current': dict(), 'prev': dict()}}
     }
 
     dual_variables = {
         'v_sqr': {'tso': {'current': dict()}, 'dso': {'current': dict()}},
         'pf': {'tso': {'current': dict()}, 'dso': {'current': dict()}},
-        'ess': {'tso': {'current': dict()}, 'dso': {'current': dict()}, 'esso': {'current': dict()}}
+        'ess': {'tso': {'current': dict()}, 'dso': {'current': dict()}}
     }
 
     if operational_planning.params.previous_iter['ess']:
@@ -1235,7 +1234,6 @@ def create_admm_variables(operational_planning):
         consensus_variables['pf']['dso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
         consensus_variables['ess']['tso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
         consensus_variables['ess']['dso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
-        consensus_variables['ess']['esso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
 
         consensus_variables['v_sqr']['tso']['prev'][node_id] = node_base_kv
         consensus_variables['v_sqr']['dso']['prev'][node_id] = node_base_kv
@@ -1243,7 +1241,6 @@ def create_admm_variables(operational_planning):
         consensus_variables['pf']['dso']['prev'][node_id] = {'p': 0.00, 'q': 0.00}
         consensus_variables['ess']['tso']['prev'][node_id] = {'p': 0.00, 'q': 0.00}
         consensus_variables['ess']['dso']['prev'][node_id] = {'p': 0.00, 'q': 0.00}
-        consensus_variables['ess']['esso']['prev'][node_id] = {'p': 0.00, 'q': 0.00}
 
         dual_variables['v_sqr']['tso']['current'][node_id] = 0.00
         dual_variables['v_sqr']['dso']['current'][node_id] = 0.00
@@ -1251,7 +1248,6 @@ def create_admm_variables(operational_planning):
         dual_variables['pf']['dso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
         dual_variables['ess']['tso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
         dual_variables['ess']['dso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
-        dual_variables['ess']['esso']['current'][node_id] = {'p': 0.00, 'q': 0.00}
 
         if operational_planning.params.previous_iter['ess']:
             dual_variables['ess']['tso']['prev'][node_id] = {'p': 0.00, 'q': 0.00}
@@ -1421,7 +1417,7 @@ def check_consensus_convergence(operational_planning, consensus_vars, params, co
         interface_transf_rating = operational_planning.distribution_networks[node_id].get_interface_branch_rating()
         if consider_shared_ess:
             shared_ess_idx = operational_planning.transmission_network.get_shared_energy_storage_idx(node_id)
-            shared_ess_rating = abs(operational_planning.transmission_network.network.shared_energy_storages[shared_ess_idx].s) * s_base
+            shared_ess_rating = abs(operational_planning.transmission_network.shared_energy_storages[shared_ess_idx].s) * s_base
             if isclose(shared_ess_rating, 0.00, abs_tol=SMALL_TOLERANCE):
                 shared_ess_rating = 1.00
 
@@ -1598,6 +1594,8 @@ def _write_operational_planning_results_to_excel(operational_planning, results, 
 
     _write_operational_planning_main_info_to_excel(operational_planning, wb, results, t)
     _write_operational_planning_main_info_to_excel_detailed(operational_planning, wb, results['summary_detail'], t)
+    if consider_shared_ess:
+        _write_shared_ess_specifications(wb, operational_planning.shared_ess_data)
 
     # Primal evolution
     if primal_evolution:
@@ -1910,6 +1908,28 @@ def _write_operational_planning_main_info_per_operator_detailed(sheet, operator_
     return line_idx
 
 
+def _write_shared_ess_specifications(workbook, shared_ess_info):
+
+    sheet = workbook.create_sheet('Shared ESS Specifications')
+
+    decimal_style = '0.000'
+
+    # Write Header
+    row_idx = 1
+    sheet.cell(row=row_idx, column=1).value = 'Node ID'
+    sheet.cell(row=row_idx, column=2).value = 'Sinst, [MVA]'
+    sheet.cell(row=row_idx, column=3).value = 'Einst, [MVAh]'
+
+    # Write Shared ESS specifications
+    for shared_ess in shared_ess_info.shared_energy_storages:
+        row_idx = row_idx + 1
+        sheet.cell(row=row_idx, column=1).value = shared_ess.bus
+        sheet.cell(row=row_idx, column=2).value = shared_ess.s
+        sheet.cell(row=row_idx, column=2).number_format = decimal_style
+        sheet.cell(row=row_idx, column=3).value = shared_ess.e
+        sheet.cell(row=row_idx, column=3).number_format = decimal_style
+
+
 def _write_objective_function_evolution_to_excel(workbook, primal_evolution):
 
     sheet = workbook.create_sheet('Primal Evolution')
@@ -2116,17 +2136,17 @@ def _write_shared_energy_storages_results_to_excel(operational_planning, workboo
         expected_soc[node_id] = 0.00
         expected_soc_percent[node_id] = 0.00
 
-    for s_o in results['tso']['results']['scenarios']:
+    for s_o in results['tso']['scenarios']:
 
         omega_s = operational_planning.transmission_network.prob_operation_scenarios[s_o]
 
         for node_id in operational_planning.active_distribution_network_nodes:
 
-            ess_p = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['p'][node_id]
-            ess_q = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['q'][node_id]
-            ess_s = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['s'][node_id]
-            ess_soc = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['soc'][node_id]
-            ess_soc_percent = results['tso']['results']['scenarios'][s_o]['shared_energy_storages']['soc_percent'][node_id]
+            ess_p = results['tso']['scenarios'][s_o]['shared_energy_storages']['p'][node_id]
+            ess_q = results['tso']['scenarios'][s_o]['shared_energy_storages']['q'][node_id]
+            ess_s = results['tso']['scenarios'][s_o]['shared_energy_storages']['s'][node_id]
+            ess_soc = results['tso']['scenarios'][s_o]['shared_energy_storages']['soc'][node_id]
+            ess_soc_percent = results['tso']['scenarios'][s_o]['shared_energy_storages']['soc_percent'][node_id]
 
             # Active power
             row_idx = row_idx + 1
@@ -2252,14 +2272,14 @@ def _write_shared_energy_storages_results_to_excel(operational_planning, workboo
         expected_soc = 0.00
         expected_soc_percent = 0.00
 
-        for s_o in results['dso'][node_id]['results']['scenarios']:
+        for s_o in results['dso'][node_id]['scenarios']:
 
             omega_s = distribution_network.prob_operation_scenarios[s_o]
-            ess_p = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['p'][ref_node_id]
-            ess_q = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['q'][ref_node_id]
-            ess_s = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['s'][ref_node_id]
-            ess_soc = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['soc'][ref_node_id]
-            ess_soc_percent = results['dso'][node_id]['results']['scenarios'][s_o]['shared_energy_storages']['soc_percent'][ref_node_id]
+            ess_p = results['dso'][node_id]['scenarios'][s_o]['shared_energy_storages']['p'][ref_node_id]
+            ess_q = results['dso'][node_id]['scenarios'][s_o]['shared_energy_storages']['q'][ref_node_id]
+            ess_s = results['dso'][node_id]['scenarios'][s_o]['shared_energy_storages']['s'][ref_node_id]
+            ess_soc = results['dso'][node_id]['scenarios'][s_o]['shared_energy_storages']['soc'][ref_node_id]
+            ess_soc_percent = results['dso'][node_id]['scenarios'][s_o]['shared_energy_storages']['soc_percent'][ref_node_id]
 
             # Active power
             row_idx = row_idx + 1
@@ -3940,39 +3960,40 @@ def _check_interface_nodes_base_voltage_consistency(operational_planning):
 def _add_shared_energy_storage_to_transmission_network(operational_planning):
     s_base = operational_planning.transmission_network.baseMVA
     for node_id in operational_planning.active_distribution_network_nodes:
-        for shared_ess in operational_planning.shared_ess_data.shared_energy_storages:
-            if shared_ess.bus == node_id:
+        for shared_ess_data in operational_planning.shared_ess_data.shared_energy_storages:
+            if shared_ess_data.bus == node_id:
                 shared_energy_storage = EnergyStorage()
                 shared_energy_storage.bus = node_id
-                shared_energy_storage.s = shared_ess.s / s_base
-                shared_energy_storage.e = shared_ess.e / s_base
-                shared_energy_storage.e_init = shared_ess.e_init / s_base
-                shared_energy_storage.e_min = shared_ess.e_min / s_base
-                shared_energy_storage.e_max = shared_ess.e_max / s_base
-                shared_energy_storage.eff_ch = shared_ess.eff_ch
-                shared_energy_storage.eff_dch = shared_ess.eff_dch
-                shared_energy_storage.max_pf = shared_ess.max_pf
-                shared_energy_storage.min_pf = shared_ess.min_pf
+                shared_energy_storage.s = shared_ess_data.s / s_base
+                shared_energy_storage.e = shared_ess_data.e / s_base
+                shared_energy_storage.e_init = shared_ess_data.e_init / s_base
+                shared_energy_storage.e_min = shared_ess_data.e_min / s_base
+                shared_energy_storage.e_max = shared_ess_data.e_max / s_base
+                shared_energy_storage.eff_ch = shared_ess_data.eff_ch
+                shared_energy_storage.eff_dch = shared_ess_data.eff_dch
+                shared_energy_storage.max_pf = shared_ess_data.max_pf
+                shared_energy_storage.min_pf = shared_ess_data.min_pf
                 operational_planning.transmission_network.shared_energy_storages.append(shared_energy_storage)
 
 
 def _add_shared_energy_storage_to_distribution_network(operational_planning):
     for node_id in operational_planning.distribution_networks:
+        distribution_network = operational_planning.distribution_networks[node_id]
         s_base = operational_planning.distribution_networks[node_id].baseMVA
-        for shared_ess in operational_planning.shared_ess_data.shared_energy_storages:
-            if shared_ess.bus == node_id:
+        for shared_ess_data in operational_planning.shared_ess_data.shared_energy_storages:
+            if shared_ess_data.bus == node_id:
                 shared_energy_storage = EnergyStorage()
-                shared_energy_storage.bus = operational_planning.distribution_networks[node_id].get_reference_node_id()
-                shared_energy_storage.s = shared_energy_storage.s / s_base
-                shared_energy_storage.e = shared_energy_storage.e / s_base
-                shared_energy_storage.e_init = shared_ess.e_init / s_base
-                shared_energy_storage.e_min = shared_ess.e_min / s_base
-                shared_energy_storage.e_max = shared_ess.e_max / s_base
-                shared_energy_storage.eff_ch = shared_ess.eff_ch
-                shared_energy_storage.eff_dch = shared_ess.eff_dch
-                shared_energy_storage.max_pf = shared_ess.max_pf
-                shared_energy_storage.min_pf = shared_ess.min_pf
-                operational_planning.distribution_networks[node_id].shared_energy_storages.append(shared_energy_storage)
+                shared_energy_storage.bus = distribution_network.get_reference_node_id()
+                shared_energy_storage.s = shared_ess_data.s / s_base
+                shared_energy_storage.e = shared_ess_data.e / s_base
+                shared_energy_storage.e_init = shared_ess_data.e_init / s_base
+                shared_energy_storage.e_min = shared_ess_data.e_min / s_base
+                shared_energy_storage.e_max = shared_ess_data.e_max / s_base
+                shared_energy_storage.eff_ch = shared_ess_data.eff_ch
+                shared_energy_storage.eff_dch = shared_ess_data.eff_dch
+                shared_energy_storage.max_pf = shared_ess_data.max_pf
+                shared_energy_storage.min_pf = shared_ess_data.min_pf
+                distribution_network.shared_energy_storages.append(shared_energy_storage)
 
 
 def print_debug_info(operational_planning, consensus_vars, print_vmag=False, print_pf=False, print_ess=False):
