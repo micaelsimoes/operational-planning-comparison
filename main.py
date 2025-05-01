@@ -61,7 +61,7 @@ if __name__ == '__main__':
     operational_planning.read_case_study()
 
     t = 11
-    num_steps = 2
+    num_steps = 4
 
     # transmission_network = operational_planning.transmission_network
     # tn_model = transmission_network.build_model(t=11)
