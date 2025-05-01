@@ -1,0 +1,34 @@
+{
+	"obj_type": "COST",
+	"transf_reg": false,
+	"es_reg": true,
+	"fl_reg": true,
+	"rg_curt": true,
+	"l_curt": false,
+	"enforce_vg": false,
+	"branch_limit_type": "MIXED",
+	"slacks": {
+		"grid_operation": {
+			"voltage": true,
+			"branch_flow": true
+		},
+		"ess": {
+			"complementarity": false,
+			"charging": false
+		},
+		"shared_ess": {
+			"complementarity": true,
+			"charging": false
+		},
+		"node_balance": false
+	},
+	"solver": {
+		"name": "ipopt",
+		"linear_solver": "ma97",
+		"solver_tol": 1e-6,
+		"verbose": false
+	},
+	"print_to_screen": false,
+	"plot_diagram": false,
+	"print_results_to_file": false
+}
