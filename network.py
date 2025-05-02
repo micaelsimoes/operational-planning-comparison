@@ -48,6 +48,9 @@ class Network:
     def determine_pq_map(self, t=0, num_steps=4, print_pq_map=False):
         return _determine_pq_map(self, t=t, num_steps=num_steps, print_pq_map=print_pq_map)
 
+    def pq_map_comparison(self, t=0, num_steps_max=10):
+        _pq_map_comparison(self, t=t, num_steps_max=num_steps_max)
+
     def get_initial_solution(self, t=0):
         return _get_initial_solution(self, t=t)
 
@@ -1010,14 +1013,43 @@ def _determine_pq_map(network, t, num_steps, print_pq_map):
     initial_solution = network.get_initial_solution(t=t)
     vertices = _get_pq_map_vertices(network, t=t, num_steps=num_steps)
     hull = ConvexHull(vertices)
-    hull_vertices = vertices[hull.vertices]
-    inequalities = _get_pq_map_inequalities(hull_vertices)
+    inequalities = _get_pq_map_inequalities(vertices[hull.vertices])
     if print_pq_map:
         print("\nPQ Map Inequalities (a*Pg + b*Qg <= c):")
         for ineq in inequalities:
             print(f"{ineq['Pg']:.3f}*Pg + {ineq['Qg']:.3f}*Qg <= {ineq['c']:.3f}")
-        _plot_pq_map(network, t, num_steps, vertices, hull, hull_vertices, initial_solution=initial_solution)
+        _plot_pq_map(network, t, num_steps, vertices, hull, initial_solution=initial_solution)
     return initial_solution, inequalities
+
+
+def _pq_map_comparison(network, t, num_steps_max):
+    print(f'[INFO] Comparing PQ, Network {network.name}...')
+    plt.figure(figsize=(8, 6))
+    color_dict = {
+        0: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
+        1: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
+        2: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
+        3: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
+    }
+    for n in range(num_steps_max):
+        num_steps = 2 ** n
+        vertices = _get_pq_map_vertices(network, t=t, num_steps=num_steps)
+        hull = ConvexHull(vertices)
+        # plt.plot(*vertices.T, color_dict[n]['vertice'])
+        # for simplex in hull.simplices:
+        #     plt.plot(vertices[simplex, 0], vertices[simplex, 1], color_dict[n]['edge'])
+        # plt.fill(*vertices[hull.vertices].T, alpha=0.2, color=color_dict[n]['fill'])
+        alpha = 1 / (n + 1)
+        plt.fill(*vertices[hull.vertices].T, alpha=alpha, color=color_dict[n]['fill'], label=f'n={n}')
+    plt.grid(True)
+    plt.axis("equal")
+    plt.title(f"PQ Map")
+    plt.xlabel("P, [MW]")
+    plt.ylabel("Q, [MVAr]")
+    plt.legend()
+
+    filename = os.path.join(network.diagrams_dir, f'{network.name}_t={t}_comparison.pdf')
+    plt.savefig(filename, bbox_inches='tight')
 
 
 def _build_pq_map_model(network, t):
@@ -1210,14 +1242,15 @@ def _get_pq_map_inequalities(vertices):
     return inequalities
 
 
-def _plot_pq_map(network, instant, num_steps, vertices, hull, hull_vertices, initial_solution=None):
+def _plot_pq_map(network, instant, num_steps, vertices, hull, initial_solution=None):
+
     plt.figure(figsize=(8, 6))
     plt.plot(*vertices.T, 'g.')
     if initial_solution:
         plt.plot(initial_solution['Pg'], initial_solution['Qg'], 'kx')
     for simplex in hull.simplices:
         plt.plot(vertices[simplex, 0], vertices[simplex, 1], 'green')
-    plt.fill(*hull_vertices.T, alpha=0.2, color='lightgreen')
+    plt.fill(*vertices[hull.vertices].T, alpha=0.2, color='lightgreen')
     plt.grid(True)
     plt.axis("equal")
     plt.title(f"PQ Map")
