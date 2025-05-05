@@ -439,10 +439,15 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
     pf_requested = dict()
     for dn in tn_model.active_distribution_networks:
         adn_node_id = transmission_network.active_distribution_network_nodes[dn]
-        vmag_sqr = pe.value(tn_model.expected_interface_pf_p[dn])
+        vmag = sqrt(pe.value(tn_model.expected_interface_pf_p[dn]))
         pc = pe.value(tn_model.expected_interface_pf_p[dn]) * transmission_network.baseMVA
         qc = pe.value(tn_model.expected_interface_pf_q[dn]) * transmission_network.baseMVA
-        pf_requested[adn_node_id] = {'p': pc, 'q': qc, 'v_sqr': vmag_sqr}
+        pf_requested[adn_node_id] = {'Pg': pc, 'Qg': qc, 'Vg': vmag}
+        if print_pq_map:
+            init_oper_point = dn_models[adn_node_id]['initial_solution']
+            final_oper_point = pf_requested[adn_node_id]
+            distribution_network = operational_planning.distribution_networks[adn_node_id]
+            distribution_network.pq_map_comparison(t=t, num_steps_max=num_steps, initial_solution=init_oper_point, final_solution=final_oper_point)
 
     # Run OPF on DNs, considering established power flow (settlement)
     dn_models = dict()
@@ -454,9 +459,9 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
 
         dn_model = distribution_network.build_model(t=t)
         distribution_network.update_of_to_settlement(dn_model)
-        dn_model.interface_vmag_req.fix(pf_requested[node_id]['v_sqr'])
-        dn_model.interface_pf_p_req.fix(pf_requested[node_id]['p'] / distribution_network.baseMVA)
-        dn_model.interface_pf_q_req.fix(pf_requested[node_id]['q'] / distribution_network.baseMVA)
+        dn_model.interface_vmag_req.fix(pf_requested[node_id]['Vg'] ** 2.00)
+        dn_model.interface_pf_p_req.fix(pf_requested[node_id]['Pg'] / distribution_network.baseMVA)
+        dn_model.interface_pf_q_req.fix(pf_requested[node_id]['Qg'] / distribution_network.baseMVA)
 
         results['dso'][node_id] = distribution_network.optimize(dn_model)
         dn_models[node_id] = dn_model

@@ -48,8 +48,8 @@ class Network:
     def determine_pq_map(self, t=0, num_steps=4, print_pq_map=False):
         return _determine_pq_map(self, t=t, num_steps=num_steps, print_pq_map=print_pq_map)
 
-    def pq_map_comparison(self, t=0, num_steps_max=10):
-        _pq_map_comparison(self, t=t, num_steps_max=num_steps_max)
+    def pq_map_comparison(self, t=0, num_steps_max=10, initial_solution=None, final_solution=None):
+        _pq_map_comparison(self, t=t, num_steps_max=num_steps_max, initial_solution=initial_solution, final_solution=final_solution)
 
     def get_initial_solution(self, t=0):
         return _get_initial_solution(self, t=t)
@@ -1022,31 +1022,29 @@ def _determine_pq_map(network, t, num_steps, print_pq_map):
     return initial_solution, inequalities
 
 
-def _pq_map_comparison(network, t, num_steps_max):
+def _pq_map_comparison(network, t, num_steps_max, initial_solution=dict(), final_solution=dict()):
     print(f'[INFO] Comparing PQ, Network {network.name}...')
-    plt.figure(figsize=(8, 6))
-    color_dict = {
-        0: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
-        1: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
-        2: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
-        3: {'vertice': 'g.', 'edge': 'green', 'fill': 'lightgreen'},
+    plt.figure(figsize=(5, 4))
+    alpha = {
+        0: 0.75,
+        1: 0.60,
+        2: 0.45,
+        3: 0.30
     }
     for n in range(num_steps_max):
-        num_steps = 2 ** n
-        vertices = _get_pq_map_vertices(network, t=t, num_steps=num_steps)
+        num_v = 2**n
+        vertices = _get_pq_map_vertices(network, t=t, num_steps=num_v)
         hull = ConvexHull(vertices)
-        # plt.plot(*vertices.T, color_dict[n]['vertice'])
-        # for simplex in hull.simplices:
-        #     plt.plot(vertices[simplex, 0], vertices[simplex, 1], color_dict[n]['edge'])
-        # plt.fill(*vertices[hull.vertices].T, alpha=0.2, color=color_dict[n]['fill'])
-        alpha = 1 / (n + 1)
-        plt.fill(*vertices[hull.vertices].T, alpha=alpha, color=color_dict[n]['fill'], label=f'n={n}')
-    plt.grid(True)
+        plt.fill(*vertices[hull.vertices].T, alpha=alpha[n], color='green', label=f'FOR, $n={num_v}$')
+    if initial_solution:
+        plt.plot(initial_solution['Pg'], initial_solution['Qg'], 'kx', label='Initial oper. point')
+    if final_solution:
+        plt.plot(final_solution['Pg'], final_solution['Qg'], 'ko', label='Final oper. point')
+    plt.grid(True, linewidth=0.25)
     plt.axis("equal")
-    plt.title(f"PQ Map")
-    plt.xlabel("P, [MW]")
-    plt.ylabel("Q, [MVAr]")
-    plt.legend()
+    plt.xlabel("Active Power, [MW]")
+    plt.ylabel("Reactive Power, [MVAr]")
+    plt.legend(loc='lower right', fontsize=7)
 
     filename = os.path.join(network.diagrams_dir, f'{network.name}_t={t}_comparison.pdf')
     plt.savefig(filename, bbox_inches='tight')
