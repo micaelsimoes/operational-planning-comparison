@@ -79,7 +79,6 @@ if __name__ == '__main__':
 
     for _ in range(10):
         # operational_planning.run_without_coordination(t=t, filename=f'{operational_planning.name}_uncoordinated_t={t}')
-        n = 2 ** num_steps
-        operational_planning.run_hierarchical_coordination(t=t, num_steps=n, filename=f'{operational_planning.name}_hierarchical_t={t}_num_steps={n}', print_pq_map=False)
+        operational_planning.run_hierarchical_coordination(t=t, num_steps=num_steps, filename=f'{operational_planning.name}_hierarchical_t={t}_num_steps={num_steps}', print_pq_map=False)
         # operational_planning.run_distributed_coordination(t=t, filename=f'{operational_planning.name}_distributed_t={t}')
         # operational_planning.run_distributed_coordination(t=t, consider_shared_ess=True, filename=f'{operational_planning.name}_distributed_ESS_t={t}')
