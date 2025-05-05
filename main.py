@@ -66,18 +66,18 @@ if __name__ == '__main__':
     operational_planning.read_case_study()
 
     t = 11
-    num_steps = 8
+    num_steps = 4
 
-    node_id = 5
-    distribution_network = operational_planning.distribution_networks[node_id]
-    distribution_network.pq_map_comparison(t=t, num_steps_max=2)
+    # node_id = 5
+    # distribution_network = operational_planning.distribution_networks[node_id]
+    # distribution_network.pq_map_comparison(t=t, num_steps_max=4)
     # model = distribution_network.build_model(t=t)
     # results = distribution_network.optimize(model)
     # process_results = distribution_network.process_results(model, t, results)
     # distribution_network.write_optimization_results_to_excel(process_results)
     # distribution_network.determine_pq_map(t=t, num_steps=num_steps, print_pq_map=True)
 
-    # operational_planning.run_without_coordination(t=t, filename=f'{operational_planning.name}_uncoordinated_t={t}')
+    operational_planning.run_without_coordination(t=t, filename=f'{operational_planning.name}_uncoordinated_t={t}')
     # operational_planning.run_hierarchical_coordination(t=t, num_steps=num_steps, filename=f'{operational_planning.name}_hierarchical_t={t}_num_steps={num_steps}', print_pq_map=False)
     # operational_planning.run_distributed_coordination(t=t, filename=f'{operational_planning.name}_distributed_t={t}')
     # operational_planning.run_distributed_coordination(t=t, consider_shared_ess=True, filename=f'{operational_planning.name}_distributed_ESS_t={t}')
