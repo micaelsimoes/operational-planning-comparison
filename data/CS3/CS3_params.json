@@ -1,0 +1,39 @@
+{
+	"tol": {
+		"consensus": {"v": 0.50e-2, "pf": 0.50e-2, "ess": 0.50e-2},
+		"stationarity": {"v": 0.10e-2, "pf": 0.10e-2, "ess": 0.50e-2}
+	},
+	"num_max_iters": 100,
+	"adaptive_penalty": true,
+	"rho": {
+		"v": {
+			"case9": 1.00,
+			"case33_1": 1.00,
+			"case33_2": 1.00,
+			"case33_3": 1.00
+		},
+		"pf": {
+			"case9": 1.00,
+			"case33_1": 1.00,
+			"case33_2": 1.00,
+			"case33_3": 1.00
+		},
+		"ess": {
+			"case9": 1.00,
+			"case33_1": 1.00,
+			"case33_2": 1.00,
+			"case33_3": 1.00,
+			"esso": 1.00
+		}
+	},
+	"previous_iteration": {"ess": {"tso": true, "dso": true}},
+	"rho_previous_iter": {
+		"ess": {
+			"case9": 0.10,
+			"case33_1": 0.10,
+			"case33_2": 0.10,
+			"case33_3": 0.10
+		}
+	}
+}
+

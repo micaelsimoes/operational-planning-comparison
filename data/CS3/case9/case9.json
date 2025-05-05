@@ -1,0 +1,41 @@
+{
+	"baseMVA": 100.0,
+	"nodes": [
+		{"bus_i": 1, "type": 3, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 2, "type": 2, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 3, "type": 2, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 4, "type": 1, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 5, "type": 1, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 6, "type": 1, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 7, "type": 1, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 8, "type": 1, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95},
+		{"bus_i": 9, "type": 1, "Gs": 0, "Bs": 0, "baseKV": 345, "Vmax": 1.05, "Vmin": 0.95}
+	],
+	"generators": [
+		{"gen_id":1,"bus":1,"Pmax":250,"Pmin":10,"Qmax":300,"Qmin":-300,"Vg":1.04,"status":1, "type": "CONV"},
+		{"gen_id":2,"bus":2,"Pmax":300,"Pmin":10,"Qmax":300,"Qmin":-300,"Vg":1.025,"status":1, "type": "CONV"},
+		{"gen_id":3,"bus":3,"Pmax":270,"Pmin":10,"Qmax":300,"Qmin":-300,"Vg":1.025,"status":1, "type": "CONV"},
+		{"gen_id":4,"bus":4,"Pmax":80,"Pmin":0,"Qmax":80,"Qmin":-80,"Vg":1.000,"status":1, "type": "WIND", "pf_control": 1, "pf_max": 0.80, "pf_min": -0.80},
+		{"gen_id":5,"bus":6,"Pmax":100,"Pmin":0,"Qmax":100,"Qmin":-100,"Vg":1.000,"status":1, "type": "WIND", "pf_control": 1, "pf_max": 0.80, "pf_min": -0.80},
+		{"gen_id":6,"bus":8,"Pmax":125,"Pmin":0,"Qmax":125,"Qmin":-125,"Vg":1.000,"status":1, "type": "WIND", "pf_control": 1, "pf_max": 0.80, "pf_min": -0.80},
+		{"gen_id":7,"bus":4,"Pmax":175,"Pmin":0,"Qmax":175,"Qmin":-175,"Vg":1.000,"status":1, "type": "PV", "pf_control": 1, "pf_max": 0.80, "pf_min": -0.80},
+		{"gen_id":8,"bus":6,"Pmax":200,"Pmin":0,"Qmax":200,"Qmin":-200,"Vg":1.000,"status":1, "type": "PV", "pf_control": 1, "pf_max": 0.80, "pf_min": -0.80},
+		{"gen_id":9,"bus":8,"Pmax":250,"Pmin":0,"Qmax":250,"Qmin":-250,"Vg":1.000,"status":1, "type": "PV", "pf_control": 1, "pf_max": 0.80, "pf_min": -0.80}
+	],
+	"loads": [
+		{"load_id": 1, "bus": 5, "status": 1, "fl_reg": 1},
+		{"load_id": 2, "bus": 7, "status": 1, "fl_reg": 1},
+		{"load_id": 3, "bus": 9, "status": 1, "fl_reg": 1}
+	],
+	"lines": [
+		{"branch_id": 1, "fbus": 1, "tbus": 4, "r": 0, "x": 0.0576, "b": 0, "rating": 300, "status": 1},
+		{"branch_id": 2, "fbus": 4, "tbus": 5, "r": 0.017, "x": 0.092, "b": 0.158, "rating": 200, "status": 1},
+		{"branch_id": 3, "fbus": 5, "tbus": 6, "r": 0.039, "x": 0.17, "b": 0.358, "rating": 200, "status": 1},
+		{"branch_id": 4, "fbus": 3, "tbus": 6, "r": 0, "x": 0.0586, "b": 0, "rating": 200, "status": 1},
+		{"branch_id": 5, "fbus": 6, "tbus": 7, "r": 0.0119, "x": 0.1008, "b": 0.209, "rating": 120, "status": 1},
+		{"branch_id": 6, "fbus": 7, "tbus": 8, "r": 0.0085, "x": 0.072, "b": 0.149, "rating": 350, "status": 1},
+		{"branch_id": 7, "fbus": 8, "tbus": 2, "r": 0, "x": 0.0625, "b": 0, "rating": 400, "status": 1},
+		{"branch_id": 8, "fbus": 8, "tbus": 9, "r": 0.032, "x": 0.161, "b": 0.306, "rating": 300, "status": 1},
+		{"branch_id": 9, "fbus": 9, "tbus": 4, "r": 0.01, "x": 0.085, "b": 0.176, "rating": 250, "status": 1}
+	]
+}

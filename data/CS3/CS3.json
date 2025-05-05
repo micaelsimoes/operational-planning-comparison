@@ -1,0 +1,36 @@
+{	
+	"DistributionNetworks": [
+		{
+			"name": "case33_1",
+			"params_filename": "case33_params.json",
+			"operational_data_filename": "case33_1.xlsx",
+			"connection_node_id": 5
+		},
+		{
+			"name": "case33_2",
+			"params_filename": "case33_params.json",
+			"operational_data_filename": "case33_2.xlsx",
+			"connection_node_id": 7
+		},
+		{
+			"name": "case33_3",
+			"params_filename": "case33_params.json",
+			"operational_data_filename": "case33_3.xlsx",
+			"connection_node_id": 9
+		}
+	],
+	"TransmissionNetwork": {
+		"name": "case9",
+		"params_filename": "case9_params.json",
+		"operational_data_filename": "case9.xlsx"
+	},
+	"MarketData":{
+		"market_data_filename": "CS3_market_data.xlsx"		
+	},
+	"SharedEnergyStorages":{
+		"shared_ess_filename": "CS3_ESS.json"
+	},
+	"PlanningParameters": {
+		"params_filename": "CS3_params.json"
+	}
+}
