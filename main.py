@@ -66,7 +66,7 @@ if __name__ == '__main__':
     operational_planning.read_case_study()
 
     t = 11
-    num_steps = 2
+    num_steps = 1
 
     # node_id = 5
     # distribution_network = operational_planning.distribution_networks[node_id]
