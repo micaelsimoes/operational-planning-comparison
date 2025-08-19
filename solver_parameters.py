@@ -1,5 +1,6 @@
 import os
-
+from dotenv import load_dotenv
+load_dotenv('.env')
 
 # ============================================================================================
 #   Class SolverParameters
@@ -10,7 +11,7 @@ class SolverParameters:
         self.solver = 'ipopt'
         self.linear_solver = 'ma57'
         self.nlp_solver = 'ipopt'
-        self.solver_path = os.getenv('IPOPTDIR', os.environ['IPOPTDIR'])
+        self.solver_path = os.getenv('IPOPT_PATH')
         self.solver_tol = 1e-6
         self.verbose = False
 
