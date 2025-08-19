@@ -1028,14 +1028,14 @@ def _pq_map_comparison(network, t, num_steps_max, initial_solution=dict(), final
     alpha = {
         0: 0.75,
         1: 0.60,
-        2: 0.45,
-        3: 0.30
+        2: 0.50,
+        3: 0.40
     }
     for n in range(num_steps_max):
         num_v = 2**n
         vertices = _get_pq_map_vertices(network, t=t, num_steps=num_v)
         hull = ConvexHull(vertices)
-        plt.fill(*vertices[hull.vertices].T, alpha=alpha[n], color='green', label=f'FOR, $n={num_v}$')
+        plt.fill(*vertices[hull.vertices].T, linestyle='-.', linewidth=0.75, edgecolor='black', facecolor='green', alpha=alpha[n], label=f'FOR, $N={num_v}$')
     if initial_solution:
         plt.plot(initial_solution['Pg'], initial_solution['Qg'], 'kx', label='Initial oper. point')
     if final_solution:

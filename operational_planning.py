@@ -280,7 +280,7 @@ def _run_without_coordination(operational_planning, t):
         adn_node_idx = transmission_network.get_node_idx(adn_node_id)
         adn_load_idx = transmission_network.get_adn_load_idx(adn_node_id)
         for s_o in tn_model.scenarios_operation:
-            obj += tn_model.penalty_regularization * ((tn_model.e[adn_node_idx, s_o] ** 2 + tn_model.f[adn_node_idx, s_o] ** 2) - tn_model.expected_interface_vmag_sqr[dn]) ** 2
+            obj += tn_model.penalty_regularization * 1e6 * ((tn_model.e[adn_node_idx, s_o] ** 2 + tn_model.f[adn_node_idx, s_o] ** 2) - tn_model.expected_interface_vmag_sqr[dn]) ** 2
             obj += tn_model.penalty_regularization * transmission_network.baseMVA * (tn_model.pc[adn_load_idx, s_o] - tn_model.expected_interface_pf_p[dn]) ** 2
             obj += tn_model.penalty_regularization * transmission_network.baseMVA * (tn_model.qc[adn_load_idx, s_o] - tn_model.expected_interface_pf_q[dn]) ** 2
     tn_model.objective.expr = obj
@@ -387,8 +387,8 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
             expected_vmag_sqr += omega_oper * adn_vmag_sqr
             expected_pf_p += omega_oper * adn_pc
             expected_pf_q += omega_oper * adn_qc
-        tn_model.interface_expected_values.add(tn_model.expected_interface_vmag_sqr[dn] <= expected_vmag_sqr + SMALL_TOLERANCE)
-        tn_model.interface_expected_values.add(tn_model.expected_interface_vmag_sqr[dn] >= expected_vmag_sqr - SMALL_TOLERANCE)
+        #tn_model.interface_expected_values.add(tn_model.expected_interface_vmag_sqr[dn] <= expected_vmag_sqr + SMALL_TOLERANCE)
+        #tn_model.interface_expected_values.add(tn_model.expected_interface_vmag_sqr[dn] >= expected_vmag_sqr - SMALL_TOLERANCE)
         tn_model.interface_expected_values.add(tn_model.expected_interface_pf_p[dn] <= expected_pf_p + SMALL_TOLERANCE)
         tn_model.interface_expected_values.add(tn_model.expected_interface_pf_p[dn] >= expected_pf_p - SMALL_TOLERANCE)
         tn_model.interface_expected_values.add(tn_model.expected_interface_pf_q[dn] <= expected_pf_q + SMALL_TOLERANCE)
@@ -654,8 +654,8 @@ def create_transmission_network_model(transmission_network, consensus_vars, t, c
         for s_o in tso_model.scenarios_operation:
             omega_oper = transmission_network.prob_operation_scenarios[s_o]
             expected_vmag_sqr += omega_oper * (tso_model.e[adn_node_idx, s_o] ** 2 + tso_model.f[adn_node_idx, s_o] ** 2)
-            expected_pf_p += omega_oper * tso_model.pc[adn_load_idx, s_o] + tso_model.flex_p_up[adn_load_idx, s_o] - tso_model.flex_p_down[adn_load_idx, s_o]
-            expected_pf_q += omega_oper * tso_model.qc[adn_load_idx, s_o] + tso_model.flex_q_up[adn_load_idx, s_o] - tso_model.flex_q_down[adn_load_idx, s_o]
+            expected_pf_p += omega_oper * (tso_model.pc[adn_load_idx, s_o] + tso_model.flex_p_up[adn_load_idx, s_o] - tso_model.flex_p_down[adn_load_idx, s_o])
+            expected_pf_q += omega_oper * (tso_model.qc[adn_load_idx, s_o] + tso_model.flex_q_up[adn_load_idx, s_o] - tso_model.flex_q_down[adn_load_idx, s_o])
         tso_model.interface_expected_values.add(tso_model.expected_interface_vmag_sqr[dn] <= expected_vmag_sqr + SMALL_TOLERANCE)
         tso_model.interface_expected_values.add(tso_model.expected_interface_vmag_sqr[dn] >= expected_vmag_sqr - SMALL_TOLERANCE)
         tso_model.interface_expected_values.add(tso_model.expected_interface_pf_p[dn] <= expected_pf_p + SMALL_TOLERANCE)

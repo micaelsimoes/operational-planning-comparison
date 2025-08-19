@@ -1,7 +1,7 @@
 {
 	"shared_ess": [
-		{"es_id": 1, "bus": 5, "s": 1.00, "e": 10.00, "eff_ch": 1.00, "eff_dch": 0.95, "max_pf": 0.80, "min_pf": -0.80},
-		{"es_id": 2, "bus": 7, "s": 1.00, "e": 10.00, "eff_ch": 1.00, "eff_dch": 0.95, "max_pf": 0.80, "min_pf": -0.80},
-		{"es_id": 3, "bus": 9, "s": 1.00, "e": 10.00, "eff_ch": 1.00, "eff_dch": 0.95, "max_pf": 0.80, "min_pf": -0.80}
+		{"es_id": 1, "bus": 5, "s": 1.00, "e": 2.00, "eff_ch": 1.00, "eff_dch": 0.95, "max_pf": 0.80, "min_pf": -0.80},
+		{"es_id": 2, "bus": 7, "s": 1.00, "e": 2.00, "eff_ch": 1.00, "eff_dch": 0.95, "max_pf": 0.80, "min_pf": -0.80},
+		{"es_id": 3, "bus": 9, "s": 1.00, "e": 2.00, "eff_ch": 1.00, "eff_dch": 0.95, "max_pf": 0.80, "min_pf": -0.80}
 	]
 }
