@@ -5,8 +5,11 @@ from copy import copy
 import pyomo.opt as po
 import pyomo.environ as pe
 from math import acos, sqrt, tan, atan2, pi, isclose
-import matplotlib.pyplot as plt
 import networkx as nx
+import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator
+from matplotlib import patheffects
+from matplotlib.patches import Polygon, Patch
 from scipy.spatial import ConvexHull
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
@@ -49,7 +52,7 @@ class Network:
         return _determine_pq_map(self, t=t, num_steps=num_steps, print_pq_map=print_pq_map)
 
     def pq_map_comparison(self, t=0, num_steps_max=10, initial_solution=None, final_solution=None):
-        _pq_map_comparison(self, t=t, num_steps_max=num_steps_max, initial_solution=initial_solution, final_solution=final_solution)
+        _pq_map_comparison_v2(self, t=t, num_steps_max=num_steps_max, initial_solution=initial_solution, final_solution=final_solution)
 
     def get_initial_solution(self, t=0):
         return _get_initial_solution(self, t=t)
@@ -1026,16 +1029,22 @@ def _pq_map_comparison(network, t, num_steps_max, initial_solution=dict(), final
     print(f'[INFO] Comparing PQ, Network {network.name}...')
     plt.figure(figsize=(5, 4))
     alpha = {
-        0: 0.75,
-        1: 0.60,
+        0: 1.00,
+        1: 0.75,
         2: 0.50,
-        3: 0.40
+        3: 0.25
+    }
+    line_style = {
+        0: 'dotted',
+        1: 'dashdot',
+        2: 'dashed',
+        3: 'solid'
     }
     for n in range(num_steps_max):
         num_v = 2**n
         vertices = _get_pq_map_vertices(network, t=t, num_steps=num_v)
         hull = ConvexHull(vertices)
-        plt.fill(*vertices[hull.vertices].T, linestyle='-.', linewidth=0.75, edgecolor='black', facecolor='green', alpha=alpha[n], label=f'FOR, $N={num_v}$')
+        plt.fill(*vertices[hull.vertices].T, linestyle=line_style[n], linewidth=0.75, edgecolor='black', facecolor='green', alpha=alpha[n], label=f'FOR, $N={num_v}$')
     if initial_solution:
         plt.plot(initial_solution['Pg'], initial_solution['Qg'], 'kx', label='Initial oper. point')
     if final_solution:
@@ -1048,6 +1057,87 @@ def _pq_map_comparison(network, t, num_steps_max, initial_solution=dict(), final
 
     filename = os.path.join(network.diagrams_dir, f'{network.name}_t={t}_comparison.pdf')
     plt.savefig(filename, bbox_inches='tight')
+
+
+def _pq_map_comparison_v2(network, t, num_steps_max, initial_solution=dict(), final_solution=dict()):
+    print(f'[INFO] Comparing PQ, Network {network.name}...')
+    fig, ax = plt.subplots(figsize=(5.8, 4.2), constrained_layout=True)
+
+    # Transparency and linestyles (outer polygons more opaque)
+    alpha = {0: 0.85, 1: 0.60, 2: 0.40, 3: 0.30}
+    line_style = {0: 'solid', 1: 'dashed', 2: 'dashdot', 3: 'dotted'}
+
+    fill_color = 'green'
+    edge_color = 'black'
+    halo = [patheffects.Stroke(linewidth=2.4, foreground='white'), patheffects.Normal()]
+
+    # Build hulls and sort by area so largest is drawn first
+    levels = []
+    for n in range(num_steps_max):
+        num_v = 2**n
+        verts = _get_pq_map_vertices(network, t=t, num_steps=num_v)
+        hull = ConvexHull(verts)
+        poly = verts[hull.vertices]
+        area = hull.volume
+        levels.append((area, n, num_v, poly))
+    levels.sort(key=lambda x: x[0], reverse=True)
+
+    legend_patches = []
+
+    # Draw polygons
+    for _, n, num_v, poly in levels:
+        a = alpha.get(n, max(0.12, 0.55 - 0.12*n))
+        ls = line_style.get(n, 'solid')
+
+        # Fill
+        patch = Polygon(poly, closed=True,
+                        facecolor=fill_color, alpha=a,
+                        edgecolor='none')
+        ax.add_patch(patch)
+
+        # Outline with halo
+        xy = np.vstack([poly, poly[0]])
+        ax.plot(xy[:,0], xy[:,1],
+                linestyle=ls, color=edge_color, linewidth=1.4, zorder=5,
+                path_effects=halo)
+
+        # Add legend patch (match fill and edge)
+        legend_patches.append(
+            Patch(facecolor=fill_color, alpha=a, edgecolor=edge_color, linestyle=ls,
+                  label=f'FOR, $N={num_v}$')
+        )
+
+    # Operation points
+    if initial_solution:
+        ax.plot(initial_solution['Pg'], initial_solution['Qg'], 'kx',
+                ms=7, mew=1.4, zorder=7, label='Initial oper. point')
+    if final_solution:
+        ax.plot(final_solution['Pg'], final_solution['Qg'], 'ko',  # solid black circle
+                ms=6, zorder=7, label='Final oper. point')
+
+
+    # Axes & grid
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.margins(0.05)
+    ax.set_xlabel("Active Power, [MW]")
+    ax.set_ylabel("Reactive Power, [MVAr]")
+    ax.grid(True, linewidth=0.4, alpha=0.6)
+    ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.grid(True, which='minor', linewidth=0.3, alpha=0.25)
+
+    # Legend: op points first, then polygon patches
+    handles, labels = ax.get_legend_handles_labels()
+    op_idx = [i for i,l in enumerate(labels) if 'oper. point' in l]
+    op_handles = [handles[i] for i in op_idx]
+
+    ax.legend(op_handles + legend_patches,
+              [h.get_label() for h in op_handles] + [p.get_label() for p in legend_patches],
+              loc='lower right', fontsize=8, frameon=True, framealpha=0.9)
+
+    filename = os.path.join(network.diagrams_dir, f'{network.name}_t={t}_comparison.pdf')
+    plt.savefig(filename, bbox_inches='tight')
+    plt.close(fig)
 
 
 def _build_pq_map_model(network, t):

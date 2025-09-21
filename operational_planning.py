@@ -2,7 +2,7 @@ import os
 import time
 import pandas as pd
 from math import isclose, sqrt
-from copy import copy
+from copy import copy, deepcopy
 import pyomo.opt as po
 import pyomo.environ as pe
 from openpyxl import Workbook
@@ -39,6 +39,13 @@ class OperationalPlanning:
             filename = self.name
         self.write_operational_planning_results_to_excel(models, results, t=t, filename=filename)
 
+    def run_centralized_coordination(self, t=0, filename=str()):
+        results, network, model = _run_centralized_coordination(self, t)
+        if not filename:
+            filename = self.name
+        processed_results = _process_centralized_operational_planning_results(self, network, model, results, t=t)
+        network.write_optimization_results_to_excel(processed_results, filename=filename)
+
     def run_hierarchical_coordination(self, t=0, num_steps=8, filename=str(), print_pq_map=False):
         results, models = _run_hierarchical_coordination(self, t, num_steps, print_pq_map)
         if not filename:
@@ -51,6 +58,17 @@ class OperationalPlanning:
             filename = self.name
         self.write_operational_planning_results_to_excel(models, results, consider_shared_ess=consider_shared_ess, t=t, filename=filename, primal_evolution=primal_evolution)
         return convergence, results, models, primal_evolution
+
+    def combine_networks(self):
+        transmission_network = self.transmission_network
+        distribution_networks = self.distribution_networks
+        return _combine_networks(transmission_network, distribution_networks)
+
+    def write_centralized_operational_planning_results_to_excel(self, network, model, results, t=0, filename=str()):
+        if not filename:
+            filename = 'operational_planning_results_centralized'
+        processed_results = _process_centralized_operational_planning_results(self, network, model, results, t=t)
+        _write_centralized_operational_planning_results_to_excel(self, network, processed_results, t, filename=filename)
 
     def write_operational_planning_results_to_excel(self, optimization_models, results, consider_shared_ess=False, t=0, filename=str(), primal_evolution=list()):
         if not filename:
@@ -286,7 +304,12 @@ def _run_without_coordination(operational_planning, t):
     tn_model.objective.expr = obj
 
     # Optimize TN, Get resulting interface PFs
+    tso_start = time.time()
     results['tso'] = transmission_network.optimize(tn_model)
+    tso_end = time.time()
+    total_execution_time = tso_end - tso_start
+    print('[INFO] \t - TSO AC-OPF execution time: {:.2f} s'.format(total_execution_time))
+
     pf_requested = dict()
     for dn in tn_model.active_distribution_networks:
 
@@ -318,6 +341,154 @@ def _run_without_coordination(operational_planning, t):
     optim_models = {'tso': tn_model, 'dso': dn_models}
 
     return results, optim_models
+
+
+# ======================================================================================================================
+#  CENTRALIZED OPERATIONAL PLANNING
+# ======================================================================================================================
+def _run_centralized_coordination(operational_planning, t):
+
+    print('[INFO] Running CENTRALIZED OPERATIONAL PLANNING...')
+
+    # Combined networks
+    centralized_network = operational_planning.combine_networks()
+
+    # Centralized model
+    centralized_model = centralized_network.build_model(t)
+    start = time.time()
+    results = centralized_network.optimize(centralized_model)
+    end = time.time()
+    total_execution_time = end - start
+    print('[INFO] \t - Execution time: {:.2f} s'.format(total_execution_time))
+
+    return results, centralized_network, centralized_model
+
+
+def _combine_networks(transmission_network, distribution_networks):
+
+    print('[INFO] - Combining networks...')
+
+    combined_network = deepcopy(transmission_network)
+    combined_network.name += '_combined'
+
+    tn_node_mapping = dict()
+
+    # Reassign IDs
+    # - Nodes
+    new_nodes = list()
+    for node in combined_network.nodes:
+        new_node = copy(node)
+        new_node.old_bus_i = node.bus_i
+        new_node.bus_i = f'TN_{new_node.old_bus_i}'
+        tn_node_mapping[new_node.old_bus_i] = new_node.bus_i
+        new_nodes.append(new_node)
+    combined_network.nodes = new_nodes
+
+    # - Loads (Only include loads that are NOT ADNs)
+    new_loads = list()
+    for load in combined_network.loads:
+        if load.bus not in combined_network.active_distribution_network_nodes:
+            new_load = copy(load)
+            new_load.old_load_id = load.load_id
+            new_load.load_id = f'TN_{new_load.old_load_id}'
+            new_load.bus = tn_node_mapping[load.bus]
+            new_loads.append(new_load)
+    combined_network.loads = new_loads
+
+    # - Branches
+    new_branches = list()
+    for branch in combined_network.branches:
+        new_branch = copy(branch)
+        new_branch.old_branch_id = branch.branch_id
+        new_branch.branch_id = f'TN_{new_branch.old_branch_id}'
+        new_branch.fbus = tn_node_mapping[branch.fbus]
+        new_branch.tbus = tn_node_mapping[branch.tbus]
+        new_branches.append(new_branch)
+    combined_network.branches = new_branches
+
+    # Generators
+    new_generators = list()
+    for generator in combined_network.generators:
+        new_generator = copy(generator)
+        new_generator.old_gen_id = generator.gen_id
+        new_generator.gen_id = f'TN_{new_generator.old_gen_id}'
+        new_generator.bus = tn_node_mapping[generator.bus]
+        new_generators.append(new_generator)
+    combined_network.generators = new_generators
+
+    # Energy Storages
+    new_energy_storages = list()
+    for energy_storage in combined_network.energy_storages:
+        new_energy_storage = copy(energy_storage)
+        new_energy_storage.old_storage_id = energy_storage.storage_id
+        new_energy_storage.storage_id = f'TN_{new_energy_storage.old_storage_id}'
+        new_energy_storage.bus = tn_node_mapping[energy_storage.bus]
+        new_energy_storages.append(new_energy_storage)
+    combined_network.energy_storages = new_energy_storages
+
+    # - Shared Energy Storages (empty)
+    combined_network.shared_energy_storages = list()
+
+    # ADN nodes (empty)
+    combined_network.active_distribution_network_nodes = list()
+
+    # Add ADNs to combined network
+    for adn_node_id in distribution_networks:
+
+        distribution_network = distribution_networks[adn_node_id]
+        ref_node_id = distribution_network.get_reference_node_id()
+        local_node_mapping = dict()
+
+        # Nodes (do not add reference bus)
+        for node in distribution_network.nodes:
+            if node.type != BUS_REF:
+                new_node = copy(node)
+                new_node.old_bus_i = node.bus_i
+                new_node.bus_i = f'ADN_{adn_node_id}_{new_node.old_bus_i}'
+                local_node_mapping[new_node.old_bus_i] = new_node.bus_i
+                combined_network.nodes.append(new_node)
+
+        # Loads
+        for load in distribution_network.loads:
+            new_load = copy(load)
+            new_load.old_load_id = load.load_id
+            new_load.load_id = f'ADN_{adn_node_id}_{new_load.old_load_id}'
+            new_load.bus = local_node_mapping[load.bus]
+            combined_network.loads.append(new_load)
+
+        # Branches (update those connected to ref node)
+        for branch in distribution_network.branches:
+            new_branch = copy(branch)
+            new_branch.old_branch_id = branch.branch_id
+            new_branch.branch_id = f'ADN_{adn_node_id}_{new_branch.old_branch_id}'
+            if new_branch.fbus == ref_node_id:
+                new_branch.fbus = tn_node_mapping[adn_node_id]
+            else:
+                new_branch.fbus = local_node_mapping[branch.fbus]
+            if new_branch.tbus == ref_node_id:
+                new_branch.tbus = tn_node_mapping[adn_node_id]
+            else:
+                new_branch.tbus = local_node_mapping[branch.tbus]
+            combined_network.branches.append(new_branch)
+
+        # Generators (do not add reference generator)
+        for generator in distribution_network.generators:
+            new_generator = copy(generator)
+            if new_generator.bus != ref_node_id:
+                new_generator.old_gen_id = generator.gen_id
+                new_generator.gen_id = f'ADN_{adn_node_id}_{new_generator.old_gen_id}'
+                new_generator.bus = local_node_mapping[new_generator.bus]
+                combined_network.generators.append(new_generator)
+
+        for energy_storage in distribution_network.energy_storages:
+            new_energy_storage = copy(energy_storage)
+            new_energy_storage.old_es_id = energy_storage.es_id
+            new_energy_storage.es_id = f'ADN_{adn_node_id}_{new_energy_storage.old_es_id}'
+            new_energy_storage.bus = local_node_mapping[energy_storage.bus]
+            combined_network.energy_storages.append(new_energy_storage)
+
+    return combined_network
+
 
 
 # ======================================================================================================================
@@ -435,7 +606,11 @@ def _run_hierarchical_coordination(operational_planning, t, num_steps, print_pq_
 
     # Optimize TN, Get resulting interface PFs
     print(f'[INFO] - Running OPF on {transmission_network.name} with hierarchical constraints...')
+    tso_start = time.time()
     results['tso'] = transmission_network.optimize(tn_model)
+    tso_end = time.time()
+    total_execution_time = tso_end - tso_start
+    print('[INFO] \t - TSO AC-OPF execution time: {:.2f} s'.format(total_execution_time))
     pf_requested = dict()
     for dn in tn_model.active_distribution_networks:
         adn_node_id = transmission_network.active_distribution_network_nodes[dn]
@@ -1532,6 +1707,11 @@ def error_within_limits(sum_abs_error, num_elems, tol):
 # ======================================================================================================================
 #  RESULTS PROCESSING functions
 # ======================================================================================================================
+def _process_centralized_operational_planning_results(operational_planning, network, model, optimization_results, t):
+    processed_results = network.process_results(model, t, optimization_results)
+    return processed_results
+
+
 def _process_operational_planning_results(operational_planning, tso_model, dso_models, optimization_results, t):
 
     transmission_network = operational_planning.transmission_network
@@ -1593,6 +1773,185 @@ def _process_results_summary_detail(operational_planning, tso_model, dso_models,
 # ======================================================================================================================
 #  RESULTS OPERATIONAL PLANNING - write functions
 # ======================================================================================================================
+def _write_centralized_operational_planning_results_to_excel(operational_planning, network, results, t, filename='centralized_operation_planning'):
+
+    wb = Workbook()
+
+    _write_operational_planning_centralized_main_info_to_excel(network, wb, results, t)
+
+
+
+
+
+    # Save results
+    results_filename = os.path.join(operational_planning.results_dir, f'{filename}_centralized_operational_planning_results.xlsx')
+    try:
+        wb.save(results_filename)
+        print('[INFO] Operational Planning Results written to {}.'.format(results_filename))
+    except:
+        from datetime import datetime
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+        backup_filename = os.path.join(operational_planning.results_dir, f"{filename.replace('.xlsx', '')}_{current_time}.xlsx")
+        print(f"[WARNING] Results saved to file {backup_filename}.xlsx")
+        wb.save(backup_filename)
+
+
+def _write_operational_planning_centralized_main_info_to_excel(network, workbook, results, t):
+
+    sheet = workbook.worksheets[0]
+    sheet.title = 'Main Info'
+
+    # Write Header
+    line_idx = 1
+    sheet.cell(row=line_idx, column=1).value = 'SO'
+    sheet.cell(row=line_idx, column=2).value = 'Node ID'
+    sheet.cell(row=line_idx, column=3).value = 'Value'
+    sheet.cell(row=line_idx, column=4).value = t
+
+    # TSO
+    operator_type = 'TSO'
+    decimal_style = '0.00'
+    tn_node_id = '-'
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+
+    # - Objective
+    obj_string = 'Objective'
+    if network.params.obj_type == OBJ_MIN_COST:
+        obj_string += ' (cost), [€]'
+    elif network.params.obj_type == OBJ_CONGESTION_MANAGEMENT:
+        obj_string += ' (congestion management)'
+    sheet.cell(row=line_idx, column=3).value = obj_string
+    sheet.cell(row=line_idx, column=4).value = results['obj']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Load
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Load, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_load']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Load, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_load']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Flexibility used
+    if network.params.fl_reg:
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Flexibility used, [MWh]'
+        sheet.cell(row=line_idx, column=4).value = results['flex_used']['p']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Flexibility used, [MVArh]'
+        sheet.cell(row=line_idx, column=4).value = results['flex_used']['q']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Load curtailed
+    if network.params.l_curt:
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Load curtailed, [MWh]'
+        sheet.cell(row=line_idx, column=4).value = results['load_curt']['p']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Load curtailed, [MVArh]'
+        sheet.cell(row=line_idx, column=4).value = results['load_curt']['q']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Generation
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Generation, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_gen']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_gen']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Conventional Generation
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Conventional Generation, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_conventional_gen']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Conventional Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_conventional_gen']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Total Renewable Generation
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Renewable generation, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_renewable_gen']['p']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Renewable generation, [MVArh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_renewable_gen']['q']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Renewable generation, [MVAh]'
+    sheet.cell(row=line_idx, column=4).value = results['total_renewable_gen']['s']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Renewable Generation Curtailed
+    if network.params.rg_curt:
+        line_idx += 1
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = 'Renewable generation curtailed, [MVAh]'
+        sheet.cell(row=line_idx, column=4).value = results['gen_curt']['s']
+        sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Losses
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Losses, [MWh]'
+    sheet.cell(row=line_idx, column=4).value = results['losses']
+    sheet.cell(row=line_idx, column=4).number_format = decimal_style
+
+    # Number of operation (generation and consumption) scenarios
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    sheet.cell(row=line_idx, column=2).value = tn_node_id
+    sheet.cell(row=line_idx, column=3).value = 'Number of operation scenarios'
+    sheet.cell(row=line_idx, column=4).value = len(network.prob_operation_scenarios)
+
+
 def _write_operational_planning_results_to_excel(operational_planning, results, t, primal_evolution=list(), consider_shared_ess=False, filename='operation_planning'):
 
     wb = Workbook()
