@@ -77,10 +77,10 @@ if __name__ == '__main__':
     # distribution_network.determine_pq_map(t=t, num_steps=num_steps, print_pq_map=True)
 
     # operational_planning.run_without_coordination(t=t, filename=f'{operational_planning.name}_uncoordinated_t={t}')
-    # operational_planning.run_centralized_coordination(t=t, filename=f'{operational_planning.name}_centralized_t={t}')
+    operational_planning.run_centralized_coordination(t=t, filename=f'{operational_planning.name}_centralized_t={t}')
     # operational_planning.run_hierarchical_coordination(t=t, num_steps=1, filename=f'{operational_planning.name}_hierarchical_t={t}_num_steps={1}', print_pq_map=False)
     # operational_planning.run_hierarchical_coordination(t=t, num_steps=2, filename=f'{operational_planning.name}_hierarchical_t={t}_num_steps={2}', print_pq_map=False)
     # operational_planning.run_hierarchical_coordination(t=t, num_steps=4, filename=f'{operational_planning.name}_hierarchical_t={t}_num_steps={4}', print_pq_map=False)
     # operational_planning.run_hierarchical_coordination(t=t, num_steps=8, filename=f'{operational_planning.name}_hierarchical_t={t}_num_steps={8}', print_pq_map=False)
-    operational_planning.run_distributed_coordination(t=t, filename=f'{operational_planning.name}_distributed_t={t}')
-    operational_planning.run_distributed_coordination(t=t, consider_shared_ess=True, filename=f'{operational_planning.name}_distributed_ESS_t={t}')
+    # operational_planning.run_distributed_coordination(t=t, filename=f'{operational_planning.name}_distributed_t={t}')
+    # operational_planning.run_distributed_coordination(t=t, consider_shared_ess=True, filename=f'{operational_planning.name}_distributed_ESS_t={t}')

@@ -43,8 +43,7 @@ class OperationalPlanning:
         results, network, model = _run_centralized_coordination(self, t)
         if not filename:
             filename = self.name
-        processed_results = _process_centralized_operational_planning_results(self, network, model, results, t=t)
-        network.write_optimization_results_to_excel(processed_results, filename=filename)
+        self.write_centralized_operational_planning_results_to_excel(network, model, results, t=t, filename=filename)
 
     def run_hierarchical_coordination(self, t=0, num_steps=8, filename=str(), print_pq_map=False):
         results, models = _run_hierarchical_coordination(self, t, num_steps, print_pq_map)
@@ -1708,7 +1707,9 @@ def error_within_limits(sum_abs_error, num_elems, tol):
 #  RESULTS PROCESSING functions
 # ======================================================================================================================
 def _process_centralized_operational_planning_results(operational_planning, network, model, optimization_results, t):
-    processed_results = network.process_results(model, t, optimization_results)
+    processed_results = dict()
+    processed_results['so'] = network.process_results(model, t, optimization_results)
+    processed_results['summary_detail'] = network.process_results_summary_detail(model, t)
     return processed_results
 
 
@@ -1777,14 +1778,12 @@ def _write_centralized_operational_planning_results_to_excel(operational_plannin
 
     wb = Workbook()
 
-    _write_operational_planning_centralized_main_info_to_excel(network, wb, results, t)
-
-
-
-
+    _write_operational_planning_centralized_main_info_to_excel(network, wb, results['so'], t)
+    _write_operational_planning_centralized_main_info_to_excel_detailed(network, wb, results['summary_detail'], t)
+    _write_centralized_network_voltage_results_to_excel(network, wb, results['so'], t)
 
     # Save results
-    results_filename = os.path.join(operational_planning.results_dir, f'{filename}_centralized_operational_planning_results.xlsx')
+    results_filename = os.path.join(operational_planning.results_dir, f'{filename}_results.xlsx')
     try:
         wb.save(results_filename)
         print('[INFO] Operational Planning Results written to {}.'.format(results_filename))
@@ -1950,6 +1949,191 @@ def _write_operational_planning_centralized_main_info_to_excel(network, workbook
     sheet.cell(row=line_idx, column=2).value = tn_node_id
     sheet.cell(row=line_idx, column=3).value = 'Number of operation scenarios'
     sheet.cell(row=line_idx, column=4).value = len(network.prob_operation_scenarios)
+
+
+def _write_operational_planning_centralized_main_info_to_excel_detailed(network, workbook, results, t):
+
+    sheet = workbook.create_sheet('Main Info, Detailed')
+    decimal_style = '0.00'
+    percent_style = '0.00%'
+    operator_type = 'TSO'
+    tn_node_id = '-'
+
+    # Write Header -- Year
+    line_idx = 1
+    sheet.cell(row=line_idx, column=1).value = 'Operator'
+    sheet.cell(row=line_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=line_idx, column=3).value = 'Operation Scenario'
+    sheet.cell(row=line_idx, column=4).value = 'Probability, [%]'
+    sheet.cell(row=line_idx, column=5).value = 'OF Value'
+    sheet.cell(row=line_idx, column=6).value = 'Load, [MWh]'
+    sheet.cell(row=line_idx, column=7).value = 'Load, [MVArh]'
+    sheet.cell(row=line_idx, column=8).value = 'Flexibility used, [MWh]'
+    sheet.cell(row=line_idx, column=9).value = 'Flexibility used, [MVArh]'
+    sheet.cell(row=line_idx, column=10).value = 'Flexibility Cost, [€]'
+    sheet.cell(row=line_idx, column=11).value = 'Generation, [MWh]'
+    sheet.cell(row=line_idx, column=12).value = 'Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=13).value = 'Conventional Generation, [MWh]'
+    sheet.cell(row=line_idx, column=14).value = 'Conventional Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=15).value = 'Conventional Generation Cost, [€]'
+    sheet.cell(row=line_idx, column=16).value = 'Renewable Generation, [MWh]'
+    sheet.cell(row=line_idx, column=17).value = 'Renewable Generation, [MVArh]'
+    sheet.cell(row=line_idx, column=18).value = 'Renewable Generation, [MVAh]'
+    sheet.cell(row=line_idx, column=19).value = 'Renewable Generation Curtailed, [MVAh]'
+    sheet.cell(row=line_idx, column=20).value = 'Losses, [MWh]'
+
+    line_idx += 1
+    sheet.cell(row=line_idx, column=1).value = operator_type
+    for s_o in results['scenarios']:
+
+        sheet.cell(row=line_idx, column=1).value = operator_type
+        sheet.cell(row=line_idx, column=2).value = tn_node_id
+        sheet.cell(row=line_idx, column=3).value = s_o
+
+        # Probability, [%]
+        sheet.cell(row=line_idx, column=4).value = results['scenarios'][s_o]['probability']
+        sheet.cell(row=line_idx, column=4).number_format = percent_style
+
+        # OF
+        sheet.cell(row=line_idx, column=5).value = results['scenarios'][s_o]['obj']
+        sheet.cell(row=line_idx, column=5).number_format = decimal_style
+
+        # Load
+        sheet.cell(row=line_idx, column=6).value = results['scenarios'][s_o]['load']['p']
+        sheet.cell(row=line_idx, column=6).number_format = decimal_style
+        sheet.cell(row=line_idx, column=7).value = results['scenarios'][s_o]['load']['q']
+        sheet.cell(row=line_idx, column=7).number_format = decimal_style
+
+        # Flexibility
+        sheet.cell(row=line_idx, column=8).value = results['scenarios'][s_o]['flexibility']['p']
+        sheet.cell(row=line_idx, column=8).number_format = decimal_style
+        sheet.cell(row=line_idx, column=9).value = results['scenarios'][s_o]['flexibility']['q']
+        sheet.cell(row=line_idx, column=9).number_format = decimal_style
+
+        # Flexibility Cost, [€]
+        sheet.cell(row=line_idx, column=10).value = results['scenarios'][s_o]['cost_flexibility']
+        sheet.cell(row=line_idx, column=10).number_format = decimal_style
+
+        # Generation
+        sheet.cell(row=line_idx, column=11).value = results['scenarios'][s_o]['generation']['p']
+        sheet.cell(row=line_idx, column=11).number_format = decimal_style
+        sheet.cell(row=line_idx, column=12).value = results['scenarios'][s_o]['generation']['q']
+        sheet.cell(row=line_idx, column=12).number_format = decimal_style
+
+        # Conventional Generation
+        sheet.cell(row=line_idx, column=13).value = results['scenarios'][s_o]['generation_conventional']['p']
+        sheet.cell(row=line_idx, column=13).number_format = decimal_style
+        sheet.cell(row=line_idx, column=14).value = results['scenarios'][s_o]['generation_conventional']['q']
+        sheet.cell(row=line_idx, column=14).number_format = decimal_style
+
+        # Conventional Generation Cost
+        sheet.cell(row=line_idx, column=15).value = results['scenarios'][s_o]['generation_conventional_cost']
+        sheet.cell(row=line_idx, column=15).number_format = decimal_style
+
+        # Renewable Generation
+        sheet.cell(row=line_idx, column=16).value = results['scenarios'][s_o]['generation_renewable']['p']
+        sheet.cell(row=line_idx, column=16).number_format = decimal_style
+        sheet.cell(row=line_idx, column=17).value = results['scenarios'][s_o]['generation_renewable']['q']
+        sheet.cell(row=line_idx, column=17).number_format = decimal_style
+        sheet.cell(row=line_idx, column=18).value = results['scenarios'][s_o]['generation_renewable']['s']
+        sheet.cell(row=line_idx, column=18).number_format = decimal_style
+        sheet.cell(row=line_idx, column=19).value = results['scenarios'][s_o]['generation_renewable_curtailed']['s']
+        sheet.cell(row=line_idx, column=19).number_format = decimal_style
+
+        # Losses
+        sheet.cell(row=line_idx, column=20).value = results['scenarios'][s_o]['losses']
+        sheet.cell(row=line_idx, column=20).number_format = decimal_style
+
+        line_idx += 1
+
+
+def _write_centralized_network_voltage_results_to_excel(network, workbook, results, t):
+
+    sheet = workbook.create_sheet('Voltage')
+    decimal_style = '0.00'
+    operator_type = 'TSO'
+    tn_node_id = '-'
+    violation_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
+
+    row_idx = 1
+
+    # Write Header
+    sheet.cell(row=row_idx, column=1).value = 'Operator'
+    sheet.cell(row=row_idx, column=2).value = 'ADN Node ID'
+    sheet.cell(row=row_idx, column=3).value = 'Network Node ID'
+    sheet.cell(row=row_idx, column=4).value = 'Quantity'
+    sheet.cell(row=row_idx, column=5).value = 'Operation Scenario'
+    sheet.cell(row=row_idx, column=6).value = t
+    row_idx = row_idx + 1
+
+    ref_node_id = network.get_reference_node_id()
+    expected_vmag = dict()
+    expected_vang = dict()
+    for node in network.nodes:
+        expected_vmag[node.bus_i] = 0.00
+        expected_vang[node.bus_i] = 0.00
+
+    for s_o in results['scenarios']:
+
+        omega_s = network.prob_operation_scenarios[s_o]
+
+        for node_id in results['scenarios'][s_o]['voltage']['vmag']:
+
+            v_min, v_max = network.get_node_voltage_limits(node_id)
+            v_mag = results['scenarios'][s_o]['voltage']['vmag'][node_id]
+            v_ang = results['scenarios'][s_o]['voltage']['vang'][node_id]
+
+            # Voltage magnitude
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = node_id
+            sheet.cell(row=row_idx, column=4).value = 'Vmag, [p.u.]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = v_mag
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            if node_id != ref_node_id and (v_mag > v_max + SMALL_TOLERANCE or v_mag < v_min - SMALL_TOLERANCE):
+                sheet.cell(row=row_idx, column=6).fill = violation_fill
+            expected_vmag[node_id] += v_mag * omega_s
+            row_idx = row_idx + 1
+
+            # Voltage angle
+            sheet.cell(row=row_idx, column=1).value = operator_type
+            sheet.cell(row=row_idx, column=2).value = tn_node_id
+            sheet.cell(row=row_idx, column=3).value = node_id
+            sheet.cell(row=row_idx, column=4).value = 'Vang, [º]'
+            sheet.cell(row=row_idx, column=5).value = s_o
+            sheet.cell(row=row_idx, column=6).value = v_ang
+            sheet.cell(row=row_idx, column=6).number_format = decimal_style
+            expected_vang[node_id] += v_ang * omega_s
+            row_idx = row_idx + 1
+
+    for node in network.nodes:
+
+        node_id = node.bus_i
+        v_min, v_max = network.get_node_voltage_limits(node_id)
+
+        # Expected voltage magnitude
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = node_id
+        sheet.cell(row=row_idx, column=4).value = 'Vmag, [p.u.]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_vmag[node_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        if node_id != ref_node_id and (
+                expected_vmag[node_id] > v_max + SMALL_TOLERANCE or expected_vmag[node_id] < v_min - SMALL_TOLERANCE):
+            sheet.cell(row=row_idx, column=6).fill = violation_fill
+        row_idx = row_idx + 1
+
+        # Expected voltage angle
+        sheet.cell(row=row_idx, column=1).value = operator_type
+        sheet.cell(row=row_idx, column=2).value = tn_node_id
+        sheet.cell(row=row_idx, column=3).value = node_id
+        sheet.cell(row=row_idx, column=4).value = 'Vang, [º]'
+        sheet.cell(row=row_idx, column=5).value = 'Expected'
+        sheet.cell(row=row_idx, column=6).value = expected_vang[node_id]
+        sheet.cell(row=row_idx, column=6).number_format = decimal_style
+        row_idx = row_idx + 1
 
 
 def _write_operational_planning_results_to_excel(operational_planning, results, t, primal_evolution=list(), consider_shared_ess=False, filename='operation_planning'):
